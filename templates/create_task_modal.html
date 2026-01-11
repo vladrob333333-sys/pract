@@ -1,0 +1,51 @@
+<!-- Модальное окно создания задачи -->
+<div class="modal fade" id="createTaskModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Создание новой задачи</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="{{ url_for('create_task') }}">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">Адрес*</label>
+                        <input type="text" class="form-control" name="address" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Вид работ*</label>
+                        <select class="form-select" name="work_type" required>
+                            <option value="">Выберите вид работ</option>
+                            <option value="Ремонт линии связи">Ремонт линии связи</option>
+                            <option value="Подключение абонента">Подключение абонента</option>
+                            <option value="Профилактика">Профилактика</option>
+                            <option value="Обслуживание оборудования">Обслуживание оборудования</option>
+                            <option value="Другое">Другое</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Описание*</label>
+                        <textarea class="form-control" name="description" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Приоритет</label>
+                        <select class="form-select" name="priority">
+                            <option value="low">Низкий</option>
+                            <option value="normal" selected>Обычный</option>
+                            <option value="high">Высокий</option>
+                            <option value="urgent">Срочный</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Срок выполнения</label>
+                        <input type="date" class="form-control" name="deadline">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Создать задачу</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
