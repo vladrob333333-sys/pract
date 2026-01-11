@@ -1,0 +1,230 @@
+{% extends "layout.html" %}
+
+{% block title %}Задача #{{ task.id }}{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h4 class="mb-0">Детали задачи #{{ task.id }}</h4>
+            </div>
+            <div class="card-body">
+                <div class="row mb-3">
+                    <div class="col-md-6">
+                        <h6>Адрес:</h6>
+                        <p>{{ task.address }}</p>
+                    </div>
+                    <div class="col-md-6">
+                        <h6>Вид работ:</h6>
+                        <p>{{ task.work_type }}</p>
+                    </div>
+                </div>
+                
+                <div class="row mb-3">
+                    <div class="col-12">
+                        <h6>Описание:</h6>
+                        <p>{{ task.description }}</p>
+                    </div>
+                </div>
+                
+                <div class="row">
+                    <div class="col-md-3">
+                        <h6>Приоритет:</h6>
+                        <span class="badge bg-{% if task.priority == 'urgent' %}danger{% elif task.priority == 'high' %}warning{% elif task.priority == 'normal' %}primary{% else %}secondary{% endif %}">
+                            {{ task.priority }}
+                        </span>
+                    </div>
+                    <div class="col-md-3">
+                        <h6>Статус:</h6>
+                        <span class="badge bg-{% if task.status == 'completed' %}success{% elif task.status == 'in_progress' %}warning{% elif task.status == 'new' %}secondary{% else %}info{% endif %}">
+                            {{ task.status }}
+                        </span>
+                    </div>
+                    <div class="col-md-3">
+                        <h6>Создана:</h6>
+                        <p>{{ task.created_at.strftime('%d.%m.%Y %H:%M') }}</p>
+                    </div>
+                    <div class="col-md-3">
+                        <h6>Срок:</h6>
+                        <p>{{ task.deadline.strftime('%d.%m.%Y') if task.deadline else 'Не установлен' }}</p>
+                    </div>
+                </div>
+                
+                {% if task.status == 'in_progress' %}
+                <hr>
+                <div class="row mt-4">
+                    <div class="col-12">
+                        <h5>Учет времени</h5>
+                        <div id="timeTrackingSection">
+                            <div class="d-flex justify-content-center mb-3">
+                                {% set has_active_entry = false %}
+                                {% for entry in time_entries if not entry.end_time %}
+                                    {% set has_active_entry = true %}
+                                {% endfor %}
+                                
+                                {% if not has_active_entry %}
+                                <button id="startTimerBtn" class="btn btn-success btn-lg" onclick="startTimeTracking({{ task.id }})">
+                                    <i class="bi bi-play-circle"></i> Начать работу
+                                </button>
+                                {% else %}
+                                <button id="stopTimerBtn" class="btn btn-danger btn-lg" onclick="stopTimeTracking()">
+                                    <i class="bi bi-stop-circle"></i> Завершить работу
+                                </button>
+                                <div class="ms-3">
+                                    <h4 id="timerDisplay">00:00:00</h4>
+                                </div>
+                                {% endif %}
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label for="workDescription" class="form-label">Описание работы (опционально):</label>
+                                <textarea class="form-control" id="workDescription" rows="2"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Учет времени</h5>
+            </div>
+            <div class="card-body">
+                {% if time_entries %}
+                <div class="list-group list-group-flush">
+                    {% for entry in time_entries %}
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <small>{{ entry.start_time.strftime('%d.%m.%Y') }}</small>
+                            <span class="badge bg-primary">{{ "%.1f"|format(entry.hours_spent) }} ч</span>
+                        </div>
+                        <div class="d-flex w-100 justify-content-between">
+                            <small>{{ entry.start_time.strftime('%H:%M') }} - 
+                                   {% if entry.end_time %}{{ entry.end_time.strftime('%H:%M') }}
+                                   {% else %}в процессе...{% endif %}</small>
+                        </div>
+                        {% if entry.description %}
+                        <p class="mb-0 mt-1"><small>{{ entry.description }}</small></p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                
+                <div class="mt-3 text-center">
+                    <h6>Общее время: 
+                        {% set total_hours = namespace(value=0) %}
+                        {% for entry in time_entries %}
+                            {% set total_hours.value = total_hours.value + entry.hours_spent %}
+                        {% endfor %}
+                        <span class="text-primary">{{ "%.1f"|format(total_hours.value) }} часов</span>
+                    </h6>
+                </div>
+                {% else %}
+                <p class="text-muted text-center">Учет времени не ведется</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        {% if task.status == 'in_progress' %}
+        <div class="card mt-4">
+            <div class="card-body text-center">
+                <form method="POST" action="{{ url_for('complete_task', task_id=task.id) }}">
+                    <button type="submit" class="btn btn-success w-100">
+                        <i class="bi bi-check-circle"></i> Завершить задачу
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let activeTimeEntryId = null;
+    let timerInterval = null;
+    let startTime = null;
+    
+    {% for entry in time_entries if not entry.end_time %}
+        activeTimeEntryId = {{ entry.id }};
+        startTime = new Date('{{ entry.start_time.isoformat() }}');
+        updateTimerDisplay();
+        timerInterval = setInterval(updateTimerDisplay, 1000);
+    {% endfor %}
+    
+    function updateTimerDisplay() {
+        if (!startTime) return;
+        
+        const now = new Date();
+        const diff = now - startTime;
+        
+        const hours = Math.floor(diff / 3600000);
+        const minutes = Math.floor((diff % 3600000) / 60000);
+        const seconds = Math.floor((diff % 60000) / 1000);
+        
+        document.getElementById('timerDisplay').textContent = 
+            `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    }
+    
+    async function startTimeTracking(taskId) {
+        const description = document.getElementById('workDescription').value;
+        
+        const response = await fetch(`/worker/tasks/${taskId}/time/start`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: new URLSearchParams({
+                'description': description
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            activeTimeEntryId = data.time_entry_id;
+            startTime = new Date();
+            
+            document.getElementById('startTimerBtn').outerHTML = `
+                <button id="stopTimerBtn" class="btn btn-danger btn-lg" onclick="stopTimeTracking()">
+                    <i class="bi bi-stop-circle"></i> Завершить работу
+                </button>
+                <div class="ms-3">
+                    <h4 id="timerDisplay">00:00:00</h4>
+                </div>
+            `;
+            
+            timerInterval = setInterval(updateTimerDisplay, 1000);
+            
+            // Обновляем страницу для отображения новой записи
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            alert(data.message);
+        }
+    }
+    
+    async function stopTimeTracking() {
+        if (!activeTimeEntryId) return;
+        
+        const response = await fetch(`/worker/tasks/time/${activeTimeEntryId}/stop`, {
+            method: 'POST'
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            clearInterval(timerInterval);
+            alert(`Работа завершена. Затрачено времени: ${data.hours_spent} часов`);
+            location.reload();
+        } else {
+            alert(data.message);
+        }
+    }
+</script>
+{% endblock %}

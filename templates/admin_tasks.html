@@ -1,0 +1,226 @@
+{% extends "layout.html" %}
+
+{% block title %}Управление задачами{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2>Управление задачами</h2>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#createTaskModal">
+        <i class="bi bi-plus-circle"></i> Новая задача
+    </button>
+</div>
+
+<!-- Фильтры -->
+<div class="card mb-4">
+    <div class="card-body">
+        <form method="GET" class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label">Статус</label>
+                <select class="form-select" name="status" onchange="this.form.submit()">
+                    <option value="all" {% if status_filter == 'all' %}selected{% endif %}>Все статусы</option>
+                    <option value="new" {% if status_filter == 'new' %}selected{% endif %}>Новые</option>
+                    <option value="assigned" {% if status_filter == 'assigned' %}selected{% endif %}>Назначенные</option>
+                    <option value="in_progress" {% if status_filter == 'in_progress' %}selected{% endif %}>В работе</option>
+                    <option value="completed" {% if status_filter == 'completed' %}selected{% endif %}>Выполненные</option>
+                </select>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Таблица задач -->
+<div class="card">
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Адрес</th>
+                        <th>Вид работ</th>
+                        <th>Приоритет</th>
+                        <th>Статус</th>
+                        <th>Исполнитель</th>
+                        <th>Срок</th>
+                        <th>Действия</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for task in tasks.items %}
+                    <tr>
+                        <td>{{ task.id }}</td>
+                        <td>{{ task.address }}</td>
+                        <td>{{ task.work_type }}</td>
+                        <td>
+                            <span class="badge bg-{% if task.priority == 'urgent' %}danger{% elif task.priority == 'high' %}warning{% elif task.priority == 'normal' %}primary{% else %}secondary{% endif %}">
+                                {{ task.priority }}
+                            </span>
+                        </td>
+                        <td>
+                            <span class="badge bg-{% if task.status == 'completed' %}success{% elif task.status == 'in_progress' %}warning{% elif task.status == 'new' %}secondary{% else %}info{% endif %}">
+                                {{ task.status }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if task.assigned_to %}
+                                {{ task.assigned_worker.full_name }}
+                            {% else %}
+                                <span class="text-muted">Не назначен</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if task.deadline %}
+                                {{ task.deadline.strftime('%d.%m.%Y') }}
+                            {% else %}
+                                <span class="text-muted">Не установлен</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary" data-bs-toggle="modal" 
+                                        data-bs-target="#editTaskModal{{ task.id }}">
+                                    Редактировать
+                                </button>
+                                <button class="btn btn-outline-danger" data-bs-toggle="modal" 
+                                        data-bs-target="#deleteTaskModal{{ task.id }}">
+                                    Удалить
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                    
+                    <!-- Модальное окно редактирования -->
+                    <div class="modal fade" id="editTaskModal{{ task.id }}" tabindex="-1">
+                        <div class="modal-dialog modal-lg">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Редактирование задачи #{{ task.id }}</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <form method="POST" action="{{ url_for('update_task', task_id=task.id) }}">
+                                    <div class="modal-body">
+                                        <div class="row">
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label">Адрес</label>
+                                                <input type="text" class="form-control" name="address" 
+                                                       value="{{ task.address }}" required>
+                                            </div>
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label">Вид работ</label>
+                                                <input type="text" class="form-control" name="work_type" 
+                                                       value="{{ task.work_type }}" required>
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Описание</label>
+                                            <textarea class="form-control" name="description" rows="3" required>{{ task.description }}</textarea>
+                                        </div>
+                                        <div class="row">
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label">Приоритет</label>
+                                                <select class="form-select" name="priority">
+                                                    <option value="low" {% if task.priority == 'low' %}selected{% endif %}>Низкий</option>
+                                                    <option value="normal" {% if task.priority == 'normal' %}selected{% endif %}>Обычный</option>
+                                                    <option value="high" {% if task.priority == 'high' %}selected{% endif %}>Высокий</option>
+                                                    <option value="urgent" {% if task.priority == 'urgent' %}selected{% endif %}>Срочный</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label">Исполнитель</label>
+                                                <select class="form-select" name="assigned_to">
+                                                    <option value="">Не назначен</option>
+                                                    {% for worker in workers %}
+                                                    <option value="{{ worker.id }}" 
+                                                            {% if task.assigned_to == worker.id %}selected{% endif %}>
+                                                        {{ worker.full_name }} ({{ worker.position }})
+                                                    </option>
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4 mb-3">
+                                                <label class="form-label">Срок выполнения</label>
+                                                <input type="date" class="form-control" name="deadline" 
+                                                       value="{{ task.deadline.strftime('%Y-%m-%d') if task.deadline else '' }}">
+                                            </div>
+                                        </div>
+                                        <div class="mb-3">
+                                            <label class="form-label">Статус</label>
+                                            <select class="form-select" name="status" onchange="this.form.action='{{ url_for('change_task_status', task_id=task.id) }}'; this.form.submit()">
+                                                <option value="new" {% if task.status == 'new' %}selected{% endif %}>Новая</option>
+                                                <option value="assigned" {% if task.status == 'assigned' %}selected{% endif %}>Назначенная</option>
+                                                <option value="in_progress" {% if task.status == 'in_progress' %}selected{% endif %}>В работе</option>
+                                                <option value="completed" {% if task.status == 'completed' %}selected{% endif %}>Выполненная</option>
+                                                <option value="cancelled" {% if task.status == 'cancelled' %}selected{% endif %}>Отмененная</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                                        <button type="submit" class="btn btn-primary">Сохранить изменения</button>
+                                    </div>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Модальное окно удаления -->
+                    <div class="modal fade" id="deleteTaskModal{{ task.id }}" tabindex="-1">
+                        <div class="modal-dialog">
+                            <div class="modal-content">
+                                <div class="modal-header">
+                                    <h5 class="modal-title">Подтверждение удаления</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <p>Вы уверены, что хотите удалить задачу #{{ task.id }}?</p>
+                                    <p><strong>Адрес:</strong> {{ task.address }}</p>
+                                    <p><strong>Вид работ:</strong> {{ task.work_type }}</p>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                                    <form method="POST" action="{{ url_for('delete_task', task_id=task.id) }}">
+                                        <button type="submit" class="btn btn-danger">Удалить</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- Пагинация -->
+        {% if tasks.pages > 1 %}
+        <nav aria-label="Навигация по страницам">
+            <ul class="pagination justify-content-center">
+                {% if tasks.has_prev %}
+                <li class="page-item">
+                    <a class="page-link" href="{{ url_for('admin_tasks', page=tasks.prev_num, status=status_filter) }}">Назад</a>
+                </li>
+                {% endif %}
+                
+                {% for page_num in tasks.iter_pages(left_edge=2, right_edge=2, left_current=2, right_current=2) %}
+                    {% if page_num %}
+                        <li class="page-item {% if page_num == tasks.page %}active{% endif %}">
+                            <a class="page-link" href="{{ url_for('admin_tasks', page=page_num, status=status_filter) }}">{{ page_num }}</a>
+                        </li>
+                    {% else %}
+                        <li class="page-item disabled"><span class="page-link">...</span></li>
+                    {% endif %}
+                {% endfor %}
+                
+                {% if tasks.has_next %}
+                <li class="page-item">
+                    <a class="page-link" href="{{ url_for('admin_tasks', page=tasks.next_num, status=status_filter) }}">Вперед</a>
+                </li>
+                {% endif %}
+            </ul>
+        </nav>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Модальное окно создания задачи (аналогичное из dashboard) -->
+{% include 'create_task_modal.html' %}
+{% endblock %}

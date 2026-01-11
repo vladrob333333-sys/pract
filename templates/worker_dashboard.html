@@ -1,0 +1,143 @@
+{% extends "layout.html" %}
+
+{% block title %}Мои задачи{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card bg-light">
+            <div class="card-body text-center">
+                <h5 class="card-title">Время сегодня</h5>
+                <h2 class="display-4 text-primary">{{ "%.1f"|format(today_time) }} ч</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card bg-light">
+            <div class="card-body text-center">
+                <h5 class="card-title">Время за неделю</h5>
+                <h2 class="display-4 text-success">{{ "%.1f"|format(week_time) }} ч</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Активные задачи -->
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">Назначенные задачи</h5>
+            </div>
+            <div class="card-body">
+                {% if active_tasks %}
+                <div class="list-group">
+                    {% for task in active_tasks %}
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">{{ task.work_type }}</h6>
+                            <small>{{ task.deadline.strftime('%d.%m.%Y') if task.deadline else 'Без срока' }}</small>
+                        </div>
+                        <p class="mb-1">{{ task.address }}</p>
+                        <div class="d-flex justify-content-between align-items-center mt-2">
+                            <small class="text-muted">Создана: {{ task.created_at.strftime('%d.%m.%Y') }}</small>
+                            <form method="POST" action="{{ url_for('accept_task', task_id=task.id) }}">
+                                <button type="submit" class="btn btn-sm btn-primary">Принять в работу</button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted text-center">Нет назначенных задач</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <!-- Задачи в работе -->
+    <div class="col-md-6 mb-4">
+        <div class="card">
+            <div class="card-header bg-warning">
+                <h5 class="mb-0">Задачи в работе</h5>
+            </div>
+            <div class="card-body">
+                {% if in_progress_tasks %}
+                <div class="list-group">
+                    {% for task in in_progress_tasks %}
+                    <div class="list-group-item">
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">{{ task.work_type }}</h6>
+                            <span class="badge bg-{{ 'danger' if task.priority == 'urgent' else 'warning' if task.priority == 'high' else 'primary' }}">
+                                {{ task.priority }}
+                            </span>
+                        </div>
+                        <p class="mb-1">{{ task.address }}</p>
+                        <div class="d-flex justify-content-between align-items-center mt-2">
+                            <a href="{{ url_for('task_details', task_id=task.id) }}" 
+                               class="btn btn-sm btn-outline-primary">Детали</a>
+                            <form method="POST" action="{{ url_for('complete_task', task_id=task.id) }}">
+                                <button type="submit" class="btn btn-sm btn-success">Завершить</button>
+                            </form>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="text-muted text-center">Нет задач в работе</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Недавно завершенные задачи -->
+<div class="row">
+    <div class="col-12">
+        <div class="card">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0">Недавно завершенные задачи</h5>
+            </div>
+            <div class="card-body">
+                {% if completed_tasks %}
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>Адрес</th>
+                                <th>Вид работ</th>
+                                <th>Завершена</th>
+                                <th>Затраченное время</th>
+                                <th>Действия</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for task in completed_tasks %}
+                            <tr>
+                                <td>{{ task.address }}</td>
+                                <td>{{ task.work_type }}</td>
+                                <td>{{ task.completed_at.strftime('%d.%m.%Y %H:%M') if task.completed_at else '-' }}</td>
+                                <td>
+                                    {% set total_hours = namespace(value=0) %}
+                                    {% for entry in task.time_entries %}
+                                        {% set total_hours.value = total_hours.value + entry.hours_spent %}
+                                    {% endfor %}
+                                    {{ "%.1f"|format(total_hours.value) }} ч
+                                </td>
+                                <td>
+                                    <a href="{{ url_for('task_details', task_id=task.id) }}" 
+                                       class="btn btn-sm btn-outline-primary">Просмотр</a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <p class="text-muted text-center">Нет завершенных задач</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

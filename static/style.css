@@ -1,0 +1,101 @@
+/* Основные стили */
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #f8f9fa;
+}
+
+.navbar-brand {
+    font-weight: 600;
+}
+
+.card {
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+    border: none;
+    margin-bottom: 20px;
+}
+
+.card-header {
+    border-bottom: 1px solid rgba(0,0,0,.125);
+}
+
+/* Стили для таблиц */
+.table th {
+    border-top: none;
+    font-weight: 600;
+    color: #495057;
+    background-color: #f8f9fa;
+}
+
+.table-hover tbody tr:hover {
+    background-color: rgba(0,123,255,.05);
+}
+
+/* Стили для кнопок */
+.btn-group-sm .btn {
+    padding: .25rem .5rem;
+    font-size: .875rem;
+}
+
+/* Стили для бейджей */
+.badge {
+    font-weight: 500;
+    padding: .35em .65em;
+}
+
+/* Стили для форм */
+.form-control:focus, .form-select:focus {
+    border-color: #86b7fe;
+    box-shadow: 0 0 0 0.25rem rgba(13,110,253,.25);
+}
+
+/* Стили для модальных окон */
+.modal-header {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+}
+
+/* Стили для таймера */
+#timerDisplay {
+    font-family: 'Courier New', monospace;
+    font-weight: bold;
+    color: #dc3545;
+}
+
+/* Стили для списка задач */
+.list-group-item {
+    border-left: none;
+    border-right: none;
+}
+
+.list-group-item:first-child {
+    border-top: none;
+}
+
+.list-group-item:last-child {
+    border-bottom: none;
+}
+
+/* Адаптивные стили */
+@media (max-width: 768px) {
+    .display-4 {
+        font-size: 2rem;
+    }
+    
+    .btn-lg {
+        padding: .5rem 1rem;
+        font-size: 1rem;
+    }
+}
+
+/* Стили для статусов задач */
+.status-new { color: #6c757d; }
+.status-assigned { color: #0dcaf0; }
+.status-in_progress { color: #ffc107; }
+.status-completed { color: #198754; }
+.status-cancelled { color: #dc3545; }
+
+/* Стили для приоритетов */
+.priority-low { color: #6c757d; }
+.priority-normal { color: #0d6efd; }
+.priority-high { color: #fd7e14; }
+.priority-urgent { color: #dc3545; }
