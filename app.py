@@ -5,20 +5,154 @@ from werkzeug.exceptions import abort
 from functools import wraps
 import os
 from datetime import datetime, timedelta
-from database import db, Worker, Task, TimeEntry, init_db
+import logging
+
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL', 'sqlite:///instance/app.db')
+
+# Используем PostgreSQL на Render.com, SQLite локально
+if os.environ.get('DATABASE_URL'):
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('postgres://', 'postgresql://')
+else:
+    # Для локальной разработки
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 
-# Инициализация базы данных
-db.init_app(app)
+db = SQLAlchemy(app)
 
-with app.app_context():
-    db.create_all()
-    init_db()
+# Модели базы данных
+class Worker(db.Model):
+    """Модель работника"""
+    __tablename__ = 'workers'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(80), unique=True, nullable=False)
+    password_hash = db.Column(db.String(200), nullable=False)
+    full_name = db.Column(db.String(100), nullable=False)
+    position = db.Column(db.String(100), nullable=False)
+    department = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20))
+    email = db.Column(db.String(120))
+    is_active = db.Column(db.Boolean, default=True)
+    is_admin = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    tasks = db.relationship('Task', backref='assigned_worker', lazy=True)
+    time_entries = db.relationship('TimeEntry', backref='worker', lazy=True)
+    
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+class Task(db.Model):
+    """Модель задачи/заявки"""
+    __tablename__ = 'tasks'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    address = db.Column(db.String(200), nullable=False)
+    work_type = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    priority = db.Column(db.String(20), default='normal')
+    status = db.Column(db.String(20), default='new')
+    created_by = db.Column(db.String(100), nullable=False)
+    assigned_to = db.Column(db.Integer, db.ForeignKey('workers.id'))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    deadline = db.Column(db.DateTime)
+    completed_at = db.Column(db.DateTime)
+    
+    time_entries = db.relationship('TimeEntry', backref='task', lazy=True, cascade='all, delete-orphan')
+
+class TimeEntry(db.Model):
+    """Модель учета времени выполнения"""
+    __tablename__ = 'time_entries'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    task_id = db.Column(db.Integer, db.ForeignKey('tasks.id'), nullable=False)
+    worker_id = db.Column(db.Integer, db.ForeignKey('workers.id'), nullable=False)
+    start_time = db.Column(db.DateTime, nullable=False)
+    end_time = db.Column(db.DateTime)
+    hours_spent = db.Column(db.Float, default=0.0)
+    description = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+def init_db():
+    """Инициализация базы данных с тестовыми данными"""
+    try:
+        db.create_all()
+        logger.info("Таблицы базы данных созданы")
+        
+        # Проверяем, есть ли уже администратор
+        admin_exists = Worker.query.filter_by(username='admin').first()
+        if not admin_exists:
+            admin = Worker(
+                username='admin',
+                full_name='Администратор Системы',
+                position='Системный администратор',
+                department='ИТ',
+                email='admin@company.by',
+                is_admin=True
+            )
+            admin.set_password('admin123')
+            db.session.add(admin)
+            logger.info("Создан администратор по умолчанию")
+        
+        # Проверяем, есть ли уже тестовый работник
+        worker_exists = Worker.query.filter_by(username='ivanov').first()
+        if not worker_exists:
+            worker = Worker(
+                username='ivanov',
+                full_name='Иванов Иван Иванович',
+                position='Техник связи',
+                department='Технический отдел',
+                email='ivanov@company.by'
+            )
+            worker.set_password('worker123')
+            db.session.add(worker)
+            logger.info("Создан тестовый работник")
+        
+        # Проверяем, есть ли тестовые задачи
+        task_exists = Task.query.first()
+        if not task_exists:
+            from datetime import datetime, timedelta
+            
+            tasks = [
+                Task(
+                    address='г. Минск, ул. Ленина, 15',
+                    work_type='Ремонт линии связи',
+                    description='Замена поврежденного кабеля на участке от дома 15 до распределительного щита',
+                    priority='high',
+                    status='new',
+                    created_by='admin',
+                    deadline=datetime.utcnow() + timedelta(days=3)
+                ),
+                Task(
+                    address='г. Минск, пр. Независимости, 45',
+                    work_type='Подключение нового абонента',
+                    description='Подключение интернет-услуг для квартиры 45',
+                    priority='normal',
+                    status='assigned',
+                    created_by='admin',
+                    assigned_to=2 if worker_exists else None,
+                    deadline=datetime.utcnow() + timedelta(days=5)
+                )
+            ]
+            
+            for task in tasks:
+                db.session.add(task)
+            
+            logger.info("Созданы тестовые задачи")
+        
+        db.session.commit()
+        logger.info("База данных инициализирована успешно")
+        
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Ошибка при инициализации базы данных: {str(e)}")
 
 # Декораторы для проверки прав доступа
 def login_required(f):
@@ -42,6 +176,10 @@ def admin_required(f):
             abort(403)
         return f(*args, **kwargs)
     return decorated_function
+
+# Инициализация базы данных при запуске
+with app.app_context():
+    init_db()
 
 # Маршруты аутентификации
 @app.route('/')
@@ -90,16 +228,13 @@ def logout():
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
-    # Статистика для панели администратора
     total_tasks = Task.query.count()
     completed_tasks = Task.query.filter_by(status='completed').count()
     active_tasks = Task.query.filter(Task.status.in_(['assigned', 'in_progress'])).count()
     total_workers = Worker.query.filter_by(is_active=True).count()
     
-    # Последние задачи
     recent_tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
     
-    # Задачи по статусам
     task_status_stats = db.session.query(
         Task.status, db.func.count(Task.id)
     ).group_by(Task.status).all()
@@ -195,6 +330,9 @@ def delete_task(task_id):
     task = Task.query.get_or_404(task_id)
     
     try:
+        # Удаляем связанные записи времени
+        TimeEntry.query.filter_by(task_id=task_id).delete()
+        
         db.session.delete(task)
         db.session.commit()
         flash('Задача успешно удалена', 'success')
@@ -237,7 +375,6 @@ def create_worker():
     try:
         username = request.form['username']
         
-        # Проверка уникальности имени пользователя
         if Worker.query.filter_by(username=username).first():
             flash('Пользователь с таким именем уже существует', 'danger')
             return redirect(url_for('admin_workers'))
@@ -295,35 +432,29 @@ def update_worker(worker_id):
 def worker_dashboard():
     worker_id = session['user_id']
     
-    # Активные задачи работника
     active_tasks = Task.query.filter_by(
         assigned_to=worker_id,
         status='assigned'
     ).order_by(Task.deadline.asc()).all()
     
-    # Задачи в работе
     in_progress_tasks = Task.query.filter_by(
         assigned_to=worker_id,
         status='in_progress'
     ).order_by(Task.deadline.asc()).all()
     
-    # Завершенные задачи (последние 10)
     completed_tasks = Task.query.filter_by(
         assigned_to=worker_id,
         status='completed'
     ).order_by(Task.completed_at.desc()).limit(10).all()
     
-    # Статистика по времени
     today = datetime.utcnow().date()
     week_start = today - timedelta(days=today.weekday())
     
-    # Время за сегодня
     today_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
         TimeEntry.worker_id == worker_id,
         db.func.date(TimeEntry.start_time) == today
     ).scalar() or 0
     
-    # Время за неделю
     week_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
         TimeEntry.worker_id == worker_id,
         db.func.date(TimeEntry.start_time) >= week_start
@@ -342,11 +473,9 @@ def task_details(task_id):
     task = Task.query.get_or_404(task_id)
     worker_id = session['user_id']
     
-    # Проверка, что задача назначена текущему работнику
     if task.assigned_to != worker_id and not session.get('is_admin'):
         abort(403)
     
-    # Временные записи для этой задачи
     time_entries = TimeEntry.query.filter_by(
         task_id=task_id,
         worker_id=worker_id
@@ -388,7 +517,6 @@ def complete_task(task_id):
         task.status = 'completed'
         task.completed_at = datetime.utcnow()
         
-        # Завершение активной временной записи, если есть
         active_time_entry = TimeEntry.query.filter_by(
             task_id=task_id,
             worker_id=session['user_id'],
@@ -416,7 +544,6 @@ def start_time_tracking(task_id):
     if task.assigned_to != session['user_id'] or task.status != 'in_progress':
         return jsonify({'success': False, 'message': 'Невозможно начать отсчет времени для этой задачи'})
     
-    # Проверка, нет ли уже активной записи времени
     active_entry = TimeEntry.query.filter_by(
         worker_id=session['user_id'],
         end_time=None
@@ -478,14 +605,12 @@ def get_stats():
     worker_id = session['user_id']
     
     if session.get('is_admin'):
-        # Статистика для администратора
         stats = {
             'total_tasks': Task.query.count(),
             'completed_tasks': Task.query.filter_by(status='completed').count(),
             'active_workers': Worker.query.filter_by(is_active=True).count()
         }
     else:
-        # Статистика для работника
         today = datetime.utcnow().date()
         
         stats = {
@@ -499,5 +624,20 @@ def get_stats():
     
     return jsonify(stats)
 
+# Создаем таблицы при запуске (безопасно)
+@app.before_first_request
+def create_tables():
+    try:
+        db.create_all()
+        logger.info("Таблицы базы данных проверены/созданы")
+    except Exception as e:
+        logger.error(f"Ошибка при создании таблиц: {e}")
+
+# Добавляем контекстный процессор для шаблонов
+@app.context_processor
+def inject_now():
+    return {'now': datetime.utcnow()}
+
 if __name__ == '__main__':
-    app.run(debug=True)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
