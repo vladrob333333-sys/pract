@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, g
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import abort
@@ -6,6 +6,7 @@ from functools import wraps
 import os
 from datetime import datetime, timedelta
 import logging
+import time
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -23,6 +24,10 @@ else:
 
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_recycle': 300,
+    'pool_pre_ping': True,
+}
 
 db = SQLAlchemy(app)
 
@@ -80,9 +85,15 @@ class TimeEntry(db.Model):
     description = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
+# Глобальная переменная для отслеживания инициализации
+_db_initialized = False
+
 def init_db():
     """Инициализация базы данных с тестовыми данными"""
+    global _db_initialized
+    
     try:
+        # Создаем таблицы
         db.create_all()
         logger.info("Таблицы базы данных созданы")
         
@@ -149,10 +160,12 @@ def init_db():
         
         db.session.commit()
         logger.info("База данных инициализирована успешно")
+        _db_initialized = True
         
     except Exception as e:
         db.session.rollback()
         logger.error(f"Ошибка при инициализации базы данных: {str(e)}")
+        # Не устанавливаем _db_initialized в True при ошибке
 
 # Декораторы для проверки прав доступа
 def login_required(f):
@@ -179,14 +192,28 @@ def admin_required(f):
 
 # Инициализация базы данных при запуске
 with app.app_context():
-    init_db()
+    try:
+        init_db()
+    except Exception as e:
+        logger.error(f"Ошибка при инициализации при запуске: {e}")
+
+# Middleware для инициализации базы данных при первом запросе
+@app.before_request
+def before_first_request():
+    global _db_initialized
+    if not _db_initialized and not hasattr(g, '_db_init_attempted'):
+        g._db_init_attempted = True
+        try:
+            init_db()
+        except Exception as e:
+            logger.error(f"Ошибка при инициализации в before_request: {e}")
 
 # Маршруты аутентификации
 @app.route('/')
 def index():
     if 'user_id' in session:
         worker = Worker.query.get(session['user_id'])
-        if worker.is_admin:
+        if worker and worker.is_admin:
             return redirect(url_for('admin_dashboard'))
         else:
             return redirect(url_for('worker_dashboard'))
@@ -228,45 +255,64 @@ def logout():
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
-    total_tasks = Task.query.count()
-    completed_tasks = Task.query.filter_by(status='completed').count()
-    active_tasks = Task.query.filter(Task.status.in_(['assigned', 'in_progress'])).count()
-    total_workers = Worker.query.filter_by(is_active=True).count()
-    
-    recent_tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
-    
-    task_status_stats = db.session.query(
-        Task.status, db.func.count(Task.id)
-    ).group_by(Task.status).all()
-    
-    return render_template('admin_dashboard.html',
-                         total_tasks=total_tasks,
-                         completed_tasks=completed_tasks,
-                         active_tasks=active_tasks,
-                         total_workers=total_workers,
-                         recent_tasks=recent_tasks,
-                         task_status_stats=task_status_stats)
+    try:
+        total_tasks = Task.query.count()
+        completed_tasks = Task.query.filter_by(status='completed').count()
+        active_tasks = Task.query.filter(Task.status.in_(['assigned', 'in_progress'])).count()
+        total_workers = Worker.query.filter_by(is_active=True).count()
+        
+        recent_tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
+        
+        task_status_stats = db.session.query(
+            Task.status, db.func.count(Task.id)
+        ).group_by(Task.status).all()
+        
+        return render_template('admin_dashboard.html',
+                             total_tasks=total_tasks,
+                             completed_tasks=completed_tasks,
+                             active_tasks=active_tasks,
+                             total_workers=total_workers,
+                             recent_tasks=recent_tasks,
+                             task_status_stats=task_status_stats)
+    except Exception as e:
+        logger.error(f"Ошибка в admin_dashboard: {e}")
+        flash('Ошибка при загрузке данных', 'danger')
+        return render_template('admin_dashboard.html',
+                             total_tasks=0,
+                             completed_tasks=0,
+                             active_tasks=0,
+                             total_workers=0,
+                             recent_tasks=[],
+                             task_status_stats=[])
 
 # Управление задачами (администратор)
 @app.route('/admin/tasks')
 @admin_required
 def admin_tasks():
-    page = request.args.get('page', 1, type=int)
-    status_filter = request.args.get('status', 'all')
-    
-    query = Task.query
-    
-    if status_filter != 'all':
-        query = query.filter_by(status=status_filter)
-    
-    tasks = query.order_by(Task.created_at.desc()).paginate(page=page, per_page=15)
-    
-    workers = Worker.query.filter_by(is_active=True).all()
-    
-    return render_template('admin_tasks.html', 
-                         tasks=tasks, 
-                         workers=workers,
-                         status_filter=status_filter)
+    try:
+        page = request.args.get('page', 1, type=int)
+        status_filter = request.args.get('status', 'all')
+        
+        query = Task.query
+        
+        if status_filter != 'all':
+            query = query.filter_by(status=status_filter)
+        
+        tasks = query.order_by(Task.created_at.desc()).paginate(page=page, per_page=15, error_out=False)
+        
+        workers = Worker.query.filter_by(is_active=True).all()
+        
+        return render_template('admin_tasks.html', 
+                             tasks=tasks, 
+                             workers=workers,
+                             status_filter=status_filter)
+    except Exception as e:
+        logger.error(f"Ошибка в admin_tasks: {e}")
+        flash('Ошибка при загрузке задач', 'danger')
+        return render_template('admin_tasks.html', 
+                             tasks=[], 
+                             workers=[],
+                             status_filter='all')
 
 @app.route('/admin/tasks/create', methods=['POST'])
 @admin_required
@@ -277,7 +323,7 @@ def create_task():
             work_type=request.form['work_type'],
             description=request.form['description'],
             priority=request.form.get('priority', 'normal'),
-            created_by=session['full_name'],
+            created_by=session.get('full_name', 'Администратор'),
             status='new'
         )
         
@@ -290,6 +336,7 @@ def create_task():
         flash('Задача успешно создана', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при создании задачи: {e}")
         flash(f'Ошибка при создании задачи: {str(e)}', 'danger')
     
     return redirect(url_for('admin_tasks'))
@@ -320,6 +367,7 @@ def update_task(task_id):
         flash('Задача успешно обновлена', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при обновлении задачи: {e}")
         flash(f'Ошибка при обновлении задачи: {str(e)}', 'danger')
     
     return redirect(url_for('admin_tasks'))
@@ -338,6 +386,7 @@ def delete_task(task_id):
         flash('Задача успешно удалена', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при удалении задачи: {e}")
         flash(f'Ошибка при удалении задачи: {str(e)}', 'danger')
     
     return redirect(url_for('admin_tasks'))
@@ -358,6 +407,7 @@ def change_task_status(task_id):
         flash('Статус задачи обновлен', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при изменении статуса задачи: {e}")
         flash(f'Ошибка: {str(e)}', 'danger')
     
     return redirect(url_for('admin_tasks'))
@@ -366,8 +416,13 @@ def change_task_status(task_id):
 @app.route('/admin/workers')
 @admin_required
 def admin_workers():
-    workers = Worker.query.order_by(Worker.created_at.desc()).all()
-    return render_template('admin_workers.html', workers=workers)
+    try:
+        workers = Worker.query.order_by(Worker.created_at.desc()).all()
+        return render_template('admin_workers.html', workers=workers)
+    except Exception as e:
+        logger.error(f"Ошибка в admin_workers: {e}")
+        flash('Ошибка при загрузке данных работников', 'danger')
+        return render_template('admin_workers.html', workers=[])
 
 @app.route('/admin/workers/create', methods=['POST'])
 @admin_required
@@ -397,6 +452,7 @@ def create_worker():
         flash('Работник успешно добавлен', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при добавлении работника: {e}")
         flash(f'Ошибка при добавлении работника: {str(e)}', 'danger')
     
     return redirect(url_for('admin_workers'))
@@ -422,6 +478,7 @@ def update_worker(worker_id):
         flash('Данные работника обновлены', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при обновлении работника: {e}")
         flash(f'Ошибка при обновлении данных: {str(e)}', 'danger')
     
     return redirect(url_for('admin_workers'))
@@ -432,58 +489,73 @@ def update_worker(worker_id):
 def worker_dashboard():
     worker_id = session['user_id']
     
-    active_tasks = Task.query.filter_by(
-        assigned_to=worker_id,
-        status='assigned'
-    ).order_by(Task.deadline.asc()).all()
-    
-    in_progress_tasks = Task.query.filter_by(
-        assigned_to=worker_id,
-        status='in_progress'
-    ).order_by(Task.deadline.asc()).all()
-    
-    completed_tasks = Task.query.filter_by(
-        assigned_to=worker_id,
-        status='completed'
-    ).order_by(Task.completed_at.desc()).limit(10).all()
-    
-    today = datetime.utcnow().date()
-    week_start = today - timedelta(days=today.weekday())
-    
-    today_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
-        TimeEntry.worker_id == worker_id,
-        db.func.date(TimeEntry.start_time) == today
-    ).scalar() or 0
-    
-    week_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
-        TimeEntry.worker_id == worker_id,
-        db.func.date(TimeEntry.start_time) >= week_start
-    ).scalar() or 0
-    
-    return render_template('worker_dashboard.html',
-                         active_tasks=active_tasks,
-                         in_progress_tasks=in_progress_tasks,
-                         completed_tasks=completed_tasks,
-                         today_time=today_time,
-                         week_time=week_time)
+    try:
+        active_tasks = Task.query.filter_by(
+            assigned_to=worker_id,
+            status='assigned'
+        ).order_by(Task.deadline.asc()).all()
+        
+        in_progress_tasks = Task.query.filter_by(
+            assigned_to=worker_id,
+            status='in_progress'
+        ).order_by(Task.deadline.asc()).all()
+        
+        completed_tasks = Task.query.filter_by(
+            assigned_to=worker_id,
+            status='completed'
+        ).order_by(Task.completed_at.desc()).limit(10).all()
+        
+        today = datetime.utcnow().date()
+        week_start = today - timedelta(days=today.weekday())
+        
+        today_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
+            TimeEntry.worker_id == worker_id,
+            db.func.date(TimeEntry.start_time) == today
+        ).scalar() or 0
+        
+        week_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
+            TimeEntry.worker_id == worker_id,
+            db.func.date(TimeEntry.start_time) >= week_start
+        ).scalar() or 0
+        
+        return render_template('worker_dashboard.html',
+                             active_tasks=active_tasks,
+                             in_progress_tasks=in_progress_tasks,
+                             completed_tasks=completed_tasks,
+                             today_time=today_time,
+                             week_time=week_time)
+    except Exception as e:
+        logger.error(f"Ошибка в worker_dashboard: {e}")
+        flash('Ошибка при загрузке данных', 'danger')
+        return render_template('worker_dashboard.html',
+                             active_tasks=[],
+                             in_progress_tasks=[],
+                             completed_tasks=[],
+                             today_time=0,
+                             week_time=0)
 
 @app.route('/worker/tasks/<int:task_id>')
 @login_required
 def task_details(task_id):
-    task = Task.query.get_or_404(task_id)
-    worker_id = session['user_id']
-    
-    if task.assigned_to != worker_id and not session.get('is_admin'):
-        abort(403)
-    
-    time_entries = TimeEntry.query.filter_by(
-        task_id=task_id,
-        worker_id=worker_id
-    ).order_by(TimeEntry.start_time.desc()).all()
-    
-    return render_template('task_details.html', 
-                         task=task, 
-                         time_entries=time_entries)
+    try:
+        task = Task.query.get_or_404(task_id)
+        worker_id = session['user_id']
+        
+        if task.assigned_to != worker_id and not session.get('is_admin'):
+            abort(403)
+        
+        time_entries = TimeEntry.query.filter_by(
+            task_id=task_id,
+            worker_id=worker_id
+        ).order_by(TimeEntry.start_time.desc()).all()
+        
+        return render_template('task_details.html', 
+                             task=task, 
+                             time_entries=time_entries)
+    except Exception as e:
+        logger.error(f"Ошибка в task_details: {e}")
+        flash('Ошибка при загрузке деталей задачи', 'danger')
+        return redirect(url_for('worker_dashboard'))
 
 @app.route('/worker/tasks/<int:task_id>/accept', methods=['POST'])
 @login_required
@@ -500,6 +572,7 @@ def accept_task(task_id):
         flash('Задача принята в работу', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при принятии задачи: {e}")
         flash(f'Ошибка: {str(e)}', 'danger')
     
     return redirect(url_for('worker_dashboard'))
@@ -532,6 +605,7 @@ def complete_task(task_id):
         flash('Задача отмечена как выполненная', 'success')
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при завершении задачи: {e}")
         flash(f'Ошибка: {str(e)}', 'danger')
     
     return redirect(url_for('worker_dashboard'))
@@ -539,20 +613,20 @@ def complete_task(task_id):
 @app.route('/worker/tasks/<int:task_id>/time/start', methods=['POST'])
 @login_required
 def start_time_tracking(task_id):
-    task = Task.query.get_or_404(task_id)
-    
-    if task.assigned_to != session['user_id'] or task.status != 'in_progress':
-        return jsonify({'success': False, 'message': 'Невозможно начать отсчет времени для этой задачи'})
-    
-    active_entry = TimeEntry.query.filter_by(
-        worker_id=session['user_id'],
-        end_time=None
-    ).first()
-    
-    if active_entry:
-        return jsonify({'success': False, 'message': 'Завершите текущую запись времени перед началом новой'})
-    
     try:
+        task = Task.query.get_or_404(task_id)
+        
+        if task.assigned_to != session['user_id'] or task.status != 'in_progress':
+            return jsonify({'success': False, 'message': 'Невозможно начать отсчет времени для этой задачи'})
+        
+        active_entry = TimeEntry.query.filter_by(
+            worker_id=session['user_id'],
+            end_time=None
+        ).first()
+        
+        if active_entry:
+            return jsonify({'success': False, 'message': 'Завершите текущую запись времени перед началом новой'})
+        
         time_entry = TimeEntry(
             task_id=task_id,
             worker_id=session['user_id'],
@@ -566,17 +640,18 @@ def start_time_tracking(task_id):
         return jsonify({'success': True, 'time_entry_id': time_entry.id})
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при старте отсчета времени: {e}")
         return jsonify({'success': False, 'message': str(e)})
 
 @app.route('/worker/tasks/time/<int:time_entry_id>/stop', methods=['POST'])
 @login_required
 def stop_time_tracking(time_entry_id):
-    time_entry = TimeEntry.query.get_or_404(time_entry_id)
-    
-    if time_entry.worker_id != session['user_id']:
-        return jsonify({'success': False, 'message': 'Доступ запрещен'})
-    
     try:
+        time_entry = TimeEntry.query.get_or_404(time_entry_id)
+        
+        if time_entry.worker_id != session['user_id']:
+            return jsonify({'success': False, 'message': 'Доступ запрещен'})
+        
         time_entry.end_time = datetime.utcnow()
         hours = (time_entry.end_time - time_entry.start_time).total_seconds() / 3600
         time_entry.hours_spent = round(hours, 2)
@@ -590,13 +665,18 @@ def stop_time_tracking(time_entry_id):
         })
     except Exception as e:
         db.session.rollback()
+        logger.error(f"Ошибка при остановке отсчета времени: {e}")
         return jsonify({'success': False, 'message': str(e)})
 
 def get_total_task_hours(task_id):
-    total = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter_by(
-        task_id=task_id
-    ).scalar()
-    return round(total or 0, 2)
+    try:
+        total = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter_by(
+            task_id=task_id
+        ).scalar()
+        return round(total or 0, 2)
+    except Exception as e:
+        logger.error(f"Ошибка при подсчете часов: {e}")
+        return 0
 
 # API для получения статистики
 @app.route('/api/stats')
@@ -604,39 +684,79 @@ def get_total_task_hours(task_id):
 def get_stats():
     worker_id = session['user_id']
     
-    if session.get('is_admin'):
-        stats = {
-            'total_tasks': Task.query.count(),
-            'completed_tasks': Task.query.filter_by(status='completed').count(),
-            'active_workers': Worker.query.filter_by(is_active=True).count()
-        }
-    else:
-        today = datetime.utcnow().date()
-        
-        stats = {
-            'assigned_tasks': Task.query.filter_by(assigned_to=worker_id, status='assigned').count(),
-            'in_progress_tasks': Task.query.filter_by(assigned_to=worker_id, status='in_progress').count(),
-            'today_hours': db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
-                TimeEntry.worker_id == worker_id,
-                db.func.date(TimeEntry.start_time) == today
-            ).scalar() or 0
-        }
-    
-    return jsonify(stats)
-
-# Создаем таблицы при запуске (безопасно)
-@app.before_first_request
-def create_tables():
     try:
-        db.create_all()
-        logger.info("Таблицы базы данных проверены/созданы")
+        if session.get('is_admin'):
+            stats = {
+                'total_tasks': Task.query.count(),
+                'completed_tasks': Task.query.filter_by(status='completed').count(),
+                'active_workers': Worker.query.filter_by(is_active=True).count()
+            }
+        else:
+            today = datetime.utcnow().date()
+            
+            stats = {
+                'assigned_tasks': Task.query.filter_by(assigned_to=worker_id, status='assigned').count(),
+                'in_progress_tasks': Task.query.filter_by(assigned_to=worker_id, status='in_progress').count(),
+                'today_hours': db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
+                    TimeEntry.worker_id == worker_id,
+                    db.func.date(TimeEntry.start_time) == today
+                ).scalar() or 0
+            }
+        
+        return jsonify(stats)
     except Exception as e:
-        logger.error(f"Ошибка при создании таблиц: {e}")
+        logger.error(f"Ошибка в get_stats: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Health check endpoint для Render.com
+@app.route('/health')
+def health():
+    try:
+        # Проверяем подключение к базе данных
+        db.session.execute('SELECT 1')
+        return jsonify({'status': 'healthy', 'database': 'connected'})
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return jsonify({'status': 'unhealthy', 'database': 'disconnected', 'error': str(e)}), 500
+
+# Обработчик ошибок
+@app.errorhandler(404)
+def not_found_error(error):
+    return render_template('error.html', error='Страница не найдена'), 404
+
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    return render_template('error.html', error='Внутренняя ошибка сервера'), 500
+
+@app.errorhandler(403)
+def forbidden_error(error):
+    return render_template('error.html', error='Доступ запрещен'), 403
 
 # Добавляем контекстный процессор для шаблонов
 @app.context_processor
 def inject_now():
     return {'now': datetime.utcnow()}
+
+# Создаем файл error.html если его нет
+if not os.path.exists('templates/error.html'):
+    error_html = '''
+    {% extends "layout.html" %}
+    {% block title %}Ошибка{% endblock %}
+    {% block content %}
+    <div class="container mt-5">
+        <div class="row justify-content-center">
+            <div class="col-md-6 text-center">
+                <h1 class="display-1 text-danger">Ошибка</h1>
+                <h3 class="mt-4">{{ error }}</h3>
+                <a href="{{ url_for('index') }}" class="btn btn-primary mt-4">Вернуться на главную</a>
+            </div>
+        </div>
+    </div>
+    {% endblock %}
+    '''
+    with open('templates/error.html', 'w', encoding='utf-8') as f:
+        f.write(error_html)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
