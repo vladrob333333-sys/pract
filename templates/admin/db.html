@@ -1,0 +1,43 @@
+{% extends "layout.html" %}
+{% block title %}Управление БД{% endblock %}
+{% block content %}
+<h2>Управление базой данных</h2>
+<form method="POST" action="{{ url_for('create_backup') }}" style="display:inline;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <button type="submit" class="btn btn-primary mb-3">Создать бэкап</button>
+</form>
+<div class="card">
+    <div class="card-header">
+        <h5>Список бэкапов</h5>
+    </div>
+    <div class="card-body">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Имя файла</th>
+                    <th>Дата изменения</th>
+                    <th>Размер</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for backup in backups %}
+                <tr>
+                    <td>{{ backup.name }}</td>
+                    <td>{{ backup.stat().st_mtime | datetimeformat }}</td>
+                    <td>{{ backup.stat().st_size }} байт</td>
+                    <td>
+                        <form method="POST" action="{{ url_for('restore_backup', filename=backup.name) }}" style="display:inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-sm btn-warning" onclick="return confirm('Восстановить БД из этого бэкапа?')">Восстановить</button>
+                        </form>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="4">Нет бэкапов</td></tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}
