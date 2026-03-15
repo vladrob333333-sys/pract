@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+{% block title %}Таблица {{ table_name }}{% endblock %}
+{% block content %}
+<h2>Таблица: {{ table_name }}</h2>
+<a href="{{ url_for('admin_tables') }}" class="btn btn-secondary mb-3">Назад</a>
+<div class="table-responsive">
+    <table class="table table-bordered table-sm">
+        <thead>
+            <tr>
+                {% for col in columns %}
+                <th>{{ col }}</th>
+                {% endfor %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for record in records %}
+            <tr>
+                {% for col in columns %}
+                <td>{{ record[col] }}</td>
+                {% endfor %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
