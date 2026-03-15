@@ -1,7 +1,6 @@
 {% extends "layout.html" %}
-
+{% extends "layout.html" %}
 {% block title %}Вход в систему{% endblock %}
-
 {% block content %}
 <div class="row justify-content-center">
     <div class="col-md-6">
@@ -11,6 +10,7 @@
             </div>
             <div class="card-body">
                 <form method="POST" action="{{ url_for('login') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div class="mb-3">
                         <label for="username" class="form-label">Имя пользователя</label>
                         <input type="text" class="form-control" id="username" name="username" required>
@@ -25,17 +25,15 @@
                 <hr class="my-4">
                 
                 <div class="text-center">
-                    <h6>Тестовые учетные записи:</h6>
+                    <h6>Тестовые учётные записи:</h6>
                     <div class="row">
                         <div class="col-md-6">
-                            <p class="mb-1"><strong>Администратор:</strong></p>
-                            <p class="mb-1">Логин: admin</p>
-                            <p class="mb-1">Пароль: admin123</p>
+                            <p class="mb-1"><strong>Администратор:</strong> admin / admin123</p>
+                            <p class="mb-1"><strong>Оператор:</strong> operator / operator123</p>
                         </div>
                         <div class="col-md-6">
-                            <p class="mb-1"><strong>Работник:</strong></p>
-                            <p class="mb-1">Логин: ivanov</p>
-                            <p class="mb-1">Пароль: worker123</p>
+                            <p class="mb-1"><strong>Работник:</strong> ivanov / worker123</p>
+                            <p class="mb-1"><strong>Клиент:</strong> client1 / client123</p>
                         </div>
                     </div>
                 </div>
