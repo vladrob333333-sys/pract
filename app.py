@@ -1,173 +1,72 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, g
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, g, abort, send_file
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.exceptions import abort
+from werkzeug.exceptions import HTTPException
 from functools import wraps
 import os
 from datetime import datetime, timedelta
 import logging
-import time
+import json
+import shutil
+from pathlib import Path
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
-
-# Используем PostgreSQL на Render.com, SQLite локально
-if os.environ.get('DATABASE_URL'):
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL').replace('postgres://', 'postgresql://')
-else:
-    # Для локальной разработки
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
-
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
-app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-    'pool_recycle': 300,
-    'pool_pre_ping': True,
-}
 
-db = SQLAlchemy(app)
+# Для CSRF защиты (используем Flask-WTF)
+from flask_wtf.csrf import CSRFProtect
+csrf = CSRFProtect(app)
 
-# Модели базы данных
-class Worker(db.Model):
-    """Модель работника"""
-    __tablename__ = 'workers'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(200), nullable=False)
-    full_name = db.Column(db.String(100), nullable=False)
-    position = db.Column(db.String(100), nullable=False)
-    department = db.Column(db.String(100), nullable=False)
-    phone = db.Column(db.String(20))
-    email = db.Column(db.String(120))
-    is_active = db.Column(db.Boolean, default=True)
-    is_admin = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    
-    tasks = db.relationship('Task', backref='assigned_worker', lazy=True)
-    time_entries = db.relationship('TimeEntry', backref='worker', lazy=True)
-    
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
+from database import db, User, Service, Task, TimeEntry, AuditLog, LoginAttempt, init_db
 
-class Task(db.Model):
-    """Модель задачи/заявки"""
-    __tablename__ = 'tasks'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    address = db.Column(db.String(200), nullable=False)
-    work_type = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text, nullable=False)
-    priority = db.Column(db.String(20), default='normal')
-    status = db.Column(db.String(20), default='new')
-    created_by = db.Column(db.String(100), nullable=False)
-    assigned_to = db.Column(db.Integer, db.ForeignKey('workers.id'))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    deadline = db.Column(db.DateTime)
-    completed_at = db.Column(db.DateTime)
-    
-    time_entries = db.relationship('TimeEntry', backref='task', lazy=True, cascade='all, delete-orphan')
-
-class TimeEntry(db.Model):
-    """Модель учета времени выполнения"""
-    __tablename__ = 'time_entries'
-    
-    id = db.Column(db.Integer, primary_key=True)
-    task_id = db.Column(db.Integer, db.ForeignKey('tasks.id'), nullable=False)
-    worker_id = db.Column(db.Integer, db.ForeignKey('workers.id'), nullable=False)
-    start_time = db.Column(db.DateTime, nullable=False)
-    end_time = db.Column(db.DateTime)
-    hours_spent = db.Column(db.Float, default=0.0)
-    description = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-
-# Глобальная переменная для отслеживания инициализации
-_db_initialized = False
-
-def init_db():
-    """Инициализация базы данных с тестовыми данными"""
-    global _db_initialized
-    
+# Инициализация БД
+with app.app_context():
     try:
-        # Создаем таблицы
-        db.create_all()
-        logger.info("Таблицы базы данных созданы")
-        
-        # Проверяем, есть ли уже администратор
-        admin_exists = Worker.query.filter_by(username='admin').first()
-        if not admin_exists:
-            admin = Worker(
-                username='admin',
-                full_name='Администратор Системы',
-                position='Системный администратор',
-                department='ИТ',
-                email='admin@company.by',
-                is_admin=True
-            )
-            admin.set_password('admin123')
-            db.session.add(admin)
-            logger.info("Создан администратор по умолчанию")
-        
-        # Проверяем, есть ли уже тестовый работник
-        worker_exists = Worker.query.filter_by(username='ivanov').first()
-        if not worker_exists:
-            worker = Worker(
-                username='ivanov',
-                full_name='Иванов Иван Иванович',
-                position='Техник связи',
-                department='Технический отдел',
-                email='ivanov@company.by'
-            )
-            worker.set_password('worker123')
-            db.session.add(worker)
-            logger.info("Создан тестовый работник")
-        
-        # Проверяем, есть ли тестовые задачи
-        task_exists = Task.query.first()
-        if not task_exists:
-            from datetime import datetime, timedelta
-            
-            tasks = [
-                Task(
-                    address='г. Минск, ул. Ленина, 15',
-                    work_type='Ремонт линии связи',
-                    description='Замена поврежденного кабеля на участке от дома 15 до распределительного щита',
-                    priority='high',
-                    status='new',
-                    created_by='admin',
-                    deadline=datetime.utcnow() + timedelta(days=3)
-                ),
-                Task(
-                    address='г. Минск, пр. Независимости, 45',
-                    work_type='Подключение нового абонента',
-                    description='Подключение интернет-услуг для квартиры 45',
-                    priority='normal',
-                    status='assigned',
-                    created_by='admin',
-                    assigned_to=2 if worker_exists else None,
-                    deadline=datetime.utcnow() + timedelta(days=5)
-                )
-            ]
-            
-            for task in tasks:
-                db.session.add(task)
-            
-            logger.info("Созданы тестовые задачи")
-        
-        db.session.commit()
-        logger.info("База данных инициализирована успешно")
-        _db_initialized = True
-        
+        init_db()
+        logger.info("Database initialized")
     except Exception as e:
-        db.session.rollback()
-        logger.error(f"Ошибка при инициализации базы данных: {str(e)}")
-        # Не устанавливаем _db_initialized в True при ошибке
+        logger.error(f"Database initialization error: {e}")
 
-# Декораторы для проверки прав доступа
+# Вспомогательные функции
+def log_audit(table_name, record_id, action, old_data=None, new_data=None):
+    """Запись в журнал аудита"""
+    user_id = session.get('user_id')
+    ip = request.remote_addr
+    try:
+        audit = AuditLog(
+            table_name=table_name,
+            record_id=record_id,
+            action=action,
+            old_data=json.dumps(old_data, ensure_ascii=False) if old_data else None,
+            new_data=json.dumps(new_data, ensure_ascii=False) if new_data else None,
+            user_id=user_id,
+            ip_address=ip
+        )
+        db.session.add(audit)
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"Audit log error: {e}")
+        db.session.rollback()
+
+def log_login_attempt(username, success):
+    """Запись попытки входа"""
+    ip = request.remote_addr
+    try:
+        attempt = LoginAttempt(username=username, ip_address=ip, success=success)
+        db.session.add(attempt)
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"Login attempt log error: {e}")
+        db.session.rollback()
+
+# Декораторы для проверки ролей
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -177,549 +76,529 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+def role_required(*roles):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if 'user_id' not in session:
+                flash('Требуется авторизация', 'warning')
+                return redirect(url_for('login'))
+            user = User.query.get(session['user_id'])
+            if not user or user.role not in roles:
+                abort(403)
+            return f(*args, **kwargs)
+        return decorated_function
+    return decorator
+
 def admin_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user_id' not in session:
-            flash('Требуется авторизация', 'warning')
-            return redirect(url_for('login'))
-        
-        worker = Worker.query.get(session['user_id'])
-        if not worker or not worker.is_admin:
-            abort(403)
-        return f(*args, **kwargs)
-    return decorated_function
+    return role_required('admin')(f)
 
-# Инициализация базы данных при запуске
-with app.app_context():
-    try:
-        init_db()
-    except Exception as e:
-        logger.error(f"Ошибка при инициализации при запуске: {e}")
+def operator_required(f):
+    return role_required('admin', 'operator')(f)
 
-# Middleware для инициализации базы данных при первом запросе
+def worker_required(f):
+    return role_required('admin', 'worker')(f)
+
+def client_required(f):
+    return role_required('admin', 'client')(f)
+
+# Проверка смены пароля при первом входе
 @app.before_request
-def before_first_request():
-    global _db_initialized
-    if not _db_initialized and not hasattr(g, '_db_init_attempted'):
-        g._db_init_attempted = True
-        try:
-            init_db()
-        except Exception as e:
-            logger.error(f"Ошибка при инициализации в before_request: {e}")
+def check_password_change():
+    if 'user_id' in session:
+        user = User.query.get(session['user_id'])
+        if user and user.password_change_required:
+            # Разрешаем доступ только к странице смены пароля и выходу
+            if request.endpoint not in ['change_password', 'logout', 'static']:
+                flash('Необходимо сменить пароль', 'warning')
+                return redirect(url_for('change_password'))
 
-# Маршруты аутентификации
+# Маршрут смены пароля (при первом входе или добровольно)
+@app.route('/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    user = User.query.get(session['user_id'])
+    if request.method == 'POST':
+        old_password = request.form.get('old_password')
+        new_password = request.form.get('new_password')
+        confirm = request.form.get('confirm_password')
+        
+        if not check_password_hash(user.password_hash, old_password):
+            flash('Неверный текущий пароль', 'danger')
+        elif new_password != confirm:
+            flash('Новые пароли не совпадают', 'danger')
+        elif len(new_password) < 6:
+            flash('Пароль должен быть не менее 6 символов', 'danger')
+        else:
+            user.set_password(new_password)
+            user.password_change_required = False
+            db.session.commit()
+            flash('Пароль успешно изменён', 'success')
+            return redirect(url_for('index'))
+    return render_template('change_password.html')
+
+# Главная страница-презентация
 @app.route('/')
 def index():
     if 'user_id' in session:
-        worker = Worker.query.get(session['user_id'])
-        if worker and worker.is_admin:
+        user = User.query.get(session['user_id'])
+        if user.role == 'admin':
             return redirect(url_for('admin_dashboard'))
-        else:
+        elif user.role == 'operator':
+            return redirect(url_for('operator_dashboard'))
+        elif user.role == 'worker':
             return redirect(url_for('worker_dashboard'))
-    return redirect(url_for('login'))
+        elif user.role == 'client':
+            return redirect(url_for('client_dashboard'))
+    return render_template('index.html')  # презентационная страница
 
+# Аутентификация
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
         username = request.form.get('username')
         password = request.form.get('password')
-        
-        worker = Worker.query.filter_by(username=username, is_active=True).first()
-        
-        if worker and check_password_hash(worker.password_hash, password):
-            session['user_id'] = worker.id
-            session['username'] = worker.username
-            session['is_admin'] = worker.is_admin
-            session['full_name'] = worker.full_name
+        user = User.query.filter_by(username=username, is_active=True).first()
+        success = False
+        if user and check_password_hash(user.password_hash, password):
+            session['user_id'] = user.id
+            session['username'] = user.username
+            session['role'] = user.role
+            session['full_name'] = user.full_name
             session.permanent = True
-            
+            success = True
             flash('Вход выполнен успешно', 'success')
-            
-            if worker.is_admin:
-                return redirect(url_for('admin_dashboard'))
-            else:
-                return redirect(url_for('worker_dashboard'))
         else:
             flash('Неверное имя пользователя или пароль', 'danger')
-    
+        log_login_attempt(username, success)
+        if success:
+            return redirect(url_for('index'))
     return render_template('login.html')
 
 @app.route('/logout')
 def logout():
     session.clear()
     flash('Вы вышли из системы', 'info')
-    return redirect(url_for('login'))
+    return redirect(url_for('index'))
 
 # Панель администратора
 @app.route('/admin')
 @admin_required
 def admin_dashboard():
-    try:
-        total_tasks = Task.query.count()
-        completed_tasks = Task.query.filter_by(status='completed').count()
-        active_tasks = Task.query.filter(Task.status.in_(['assigned', 'in_progress'])).count()
-        total_workers = Worker.query.filter_by(is_active=True).count()
-        
-        recent_tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
-        
-        task_status_stats = db.session.query(
-            Task.status, db.func.count(Task.id)
-        ).group_by(Task.status).all()
-        
-        return render_template('admin_dashboard.html',
-                             total_tasks=total_tasks,
-                             completed_tasks=completed_tasks,
-                             active_tasks=active_tasks,
-                             total_workers=total_workers,
-                             recent_tasks=recent_tasks,
-                             task_status_stats=task_status_stats)
-    except Exception as e:
-        logger.error(f"Ошибка в admin_dashboard: {e}")
-        flash('Ошибка при загрузке данных', 'danger')
-        return render_template('admin_dashboard.html',
-                             total_tasks=0,
-                             completed_tasks=0,
-                             active_tasks=0,
-                             total_workers=0,
-                             recent_tasks=[],
-                             task_status_stats=[])
+    stats = {
+        'users': User.query.count(),
+        'tasks': Task.query.count(),
+        'services': Service.query.count(),
+        'audit': AuditLog.query.count()
+    }
+    recent_audit = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(10).all()
+    return render_template('admin/dashboard.html', stats=stats, recent_audit=recent_audit)
 
-# Управление задачами (администратор)
-@app.route('/admin/tasks')
+# Управление пользователями (админ)
+@app.route('/admin/users')
 @admin_required
-def admin_tasks():
-    try:
-        page = request.args.get('page', 1, type=int)
-        status_filter = request.args.get('status', 'all')
-        
-        query = Task.query
-        
-        if status_filter != 'all':
-            query = query.filter_by(status=status_filter)
-        
-        tasks = query.order_by(Task.created_at.desc()).paginate(page=page, per_page=15, error_out=False)
-        
-        workers = Worker.query.filter_by(is_active=True).all()
-        
-        return render_template('admin_tasks.html', 
-                             tasks=tasks, 
-                             workers=workers,
-                             status_filter=status_filter)
-    except Exception as e:
-        logger.error(f"Ошибка в admin_tasks: {e}")
-        flash('Ошибка при загрузке задач', 'danger')
-        return render_template('admin_tasks.html', 
-                             tasks=[], 
-                             workers=[],
-                             status_filter='all')
+def admin_users():
+    users = User.query.order_by(User.created_at.desc()).all()
+    return render_template('admin/users.html', users=users)
 
-@app.route('/admin/tasks/create', methods=['POST'])
+@app.route('/admin/users/create', methods=['POST'])
 @admin_required
-def create_task():
+def create_user():
+    try:
+        user = User(
+            username=request.form['username'],
+            full_name=request.form['full_name'],
+            role=request.form['role'],
+            email=request.form.get('email'),
+            phone=request.form.get('phone'),
+            position=request.form.get('position'),
+            department=request.form.get('department'),
+            contract_number=request.form.get('contract_number') if request.form['role'] == 'client' else None,
+            is_active=True,
+            password_change_required=True
+        )
+        user.set_password(request.form['password'])
+        db.session.add(user)
+        db.session.commit()
+        log_audit('user', user.id, 'INSERT', new_data={'username': user.username, 'role': user.role})
+        flash('Пользователь создан', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error creating user: {e}")
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/<int:user_id>/update', methods=['POST'])
+@admin_required
+def update_user(user_id):
+    user = User.query.get_or_404(user_id)
+    old_data = {'username': user.username, 'full_name': user.full_name, 'role': user.role, 'is_active': user.is_active}
+    try:
+        user.full_name = request.form['full_name']
+        user.email = request.form.get('email')
+        user.phone = request.form.get('phone')
+        user.role = request.form['role']
+        user.is_active = 'is_active' in request.form
+        if request.form['role'] == 'client':
+            user.contract_number = request.form.get('contract_number')
+        else:
+            user.contract_number = None
+        if request.form.get('password'):
+            user.set_password(request.form['password'])
+            user.password_change_required = True
+        db.session.commit()
+        new_data = {'username': user.username, 'full_name': user.full_name, 'role': user.role, 'is_active': user.is_active}
+        log_audit('user', user.id, 'UPDATE', old_data, new_data)
+        flash('Данные обновлены', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating user: {e}")
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('admin_users'))
+
+@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@admin_required
+def delete_user(user_id):
+    user = User.query.get_or_404(user_id)
+    if user.id == session['user_id']:
+        flash('Нельзя удалить себя', 'danger')
+        return redirect(url_for('admin_users'))
+    try:
+        old_data = {'username': user.username}
+        db.session.delete(user)
+        db.session.commit()
+        log_audit('user', user_id, 'DELETE', old_data=old_data)
+        flash('Пользователь удалён', 'success')
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error deleting user: {e}")
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('admin_users'))
+
+# Управление услугами (админ/оператор)
+@app.route('/admin/services')
+@admin_required
+def admin_services():
+    services = Service.query.all()
+    return render_template('admin/services.html', services=services)
+
+@app.route('/admin/services/create', methods=['POST'])
+@admin_required
+def create_service():
+    try:
+        service = Service(
+            name=request.form['name'],
+            description=request.form.get('description'),
+            price=float(request.form['price']) if request.form.get('price') else None,
+            is_active='is_active' in request.form
+        )
+        db.session.add(service)
+        db.session.commit()
+        log_audit('service', service.id, 'INSERT', new_data={'name': service.name})
+        flash('Услуга добавлена', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('admin_services'))
+
+@app.route('/admin/services/<int:service_id>/update', methods=['POST'])
+@admin_required
+def update_service(service_id):
+    service = Service.query.get_or_404(service_id)
+    try:
+        service.name = request.form['name']
+        service.description = request.form.get('description')
+        service.price = float(request.form['price']) if request.form.get('price') else None
+        service.is_active = 'is_active' in request.form
+        db.session.commit()
+        log_audit('service', service.id, 'UPDATE', new_data={'name': service.name})
+        flash('Услуга обновлена', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('admin_services'))
+
+# Журналы аудита и попыток входа
+@app.route('/admin/audit')
+@admin_required
+def admin_audit():
+    page = request.args.get('page', 1, type=int)
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).paginate(page=page, per_page=20)
+    return render_template('admin/audit.html', logs=logs)
+
+@app.route('/admin/login-attempts')
+@admin_required
+def admin_login_attempts():
+    page = request.args.get('page', 1, type=int)
+    attempts = LoginAttempt.query.order_by(LoginAttempt.timestamp.desc()).paginate(page=page, per_page=20)
+    return render_template('admin/login_attempts.html', attempts=attempts)
+
+# Управление БД (бэкапы)
+BACKUP_DIR = Path('backups')
+BACKUP_DIR.mkdir(exist_ok=True)
+
+@app.route('/admin/db')
+@admin_required
+def admin_db():
+    backups = sorted(BACKUP_DIR.glob('*.db'), key=os.path.getmtime, reverse=True)
+    return render_template('admin/db.html', backups=backups)
+
+@app.route('/admin/db/backup', methods=['POST'])
+@admin_required
+def create_backup():
+    try:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        backup_path = BACKUP_DIR / f'app_backup_{timestamp}.db'
+        shutil.copy2('app.db', backup_path)
+        flash(f'Бэкап создан: {backup_path.name}', 'success')
+        log_audit('system', 0, 'BACKUP', new_data={'file': backup_path.name})
+    except Exception as e:
+        flash(f'Ошибка создания бэкапа: {str(e)}', 'danger')
+    return redirect(url_for('admin_db'))
+
+@app.route('/admin/db/restore/<path:filename>', methods=['POST'])
+@admin_required
+def restore_backup(filename):
+    backup_path = BACKUP_DIR / filename
+    if not backup_path.exists():
+        flash('Файл не найден', 'danger')
+        return redirect(url_for('admin_db'))
+    try:
+        # Закрываем все соединения с БД
+        db.session.remove()
+        db.engine.dispose()
+        # Копируем файл бэкапа
+        shutil.copy2(backup_path, 'app.db')
+        flash('БД восстановлена. Перезапустите приложение для применения.', 'success')
+        log_audit('system', 0, 'RESTORE', new_data={'file': filename})
+    except Exception as e:
+        flash(f'Ошибка восстановления: {str(e)}', 'danger')
+    return redirect(url_for('admin_db'))
+
+# Просмотр всех таблиц (админ)
+@app.route('/admin/tables')
+@admin_required
+def admin_tables():
+    tables = {
+        'users': User.query.count(),
+        'services': Service.query.count(),
+        'tasks': Task.query.count(),
+        'time_entries': TimeEntry.query.count(),
+        'audit_logs': AuditLog.query.count(),
+        'login_attempts': LoginAttempt.query.count()
+    }
+    return render_template('admin/tables.html', tables=tables)
+
+@app.route('/admin/table/<table_name>')
+@admin_required
+def view_table(table_name):
+    model_map = {
+        'users': User,
+        'services': Service,
+        'tasks': Task,
+        'time_entries': TimeEntry,
+        'audit_logs': AuditLog,
+        'login_attempts': LoginAttempt
+    }
+    model = model_map.get(table_name)
+    if not model:
+        abort(404)
+    records = model.query.all()
+    columns = [c.name for c in model.__table__.columns]
+    return render_template('admin/table_view.html', table_name=table_name, columns=columns, records=records)
+
+# Панель оператора
+@app.route('/operator')
+@operator_required
+def operator_dashboard():
+    new_tasks = Task.query.filter_by(status='new').count()
+    assigned_tasks = Task.query.filter_by(status='assigned').count()
+    completed_tasks = Task.query.filter_by(status='completed').count()
+    workers = User.query.filter_by(role='worker', is_active=True).all()
+    recent_tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
+    return render_template('operator/dashboard.html', 
+                           new_tasks=new_tasks,
+                           assigned_tasks=assigned_tasks,
+                           completed_tasks=completed_tasks,
+                           workers=workers,
+                           recent_tasks=recent_tasks)
+
+@app.route('/operator/tasks')
+@operator_required
+def operator_tasks():
+    tasks = Task.query.order_by(Task.created_at.desc()).all()
+    workers = User.query.filter_by(role='worker', is_active=True).all()
+    clients = User.query.filter_by(role='client', is_active=True).all()
+    services = Service.query.filter_by(is_active=True).all()
+    return render_template('operator/tasks.html', tasks=tasks, workers=workers, clients=clients, services=services)
+
+@app.route('/operator/tasks/create', methods=['POST'])
+@operator_required
+def operator_create_task():
     try:
         task = Task(
-            address=request.form['address'],
-            work_type=request.form['work_type'],
+            title=request.form['title'],
             description=request.form['description'],
+            address=request.form.get('address'),
+            work_type=request.form.get('work_type'),
             priority=request.form.get('priority', 'normal'),
-            created_by=session.get('full_name', 'Администратор'),
-            status='new'
+            status='new',
+            created_by_id=session['user_id']
         )
-        
+        if request.form.get('client_id'):
+            task.client_id = int(request.form['client_id'])
+        if request.form.get('service_id'):
+            task.service_id = int(request.form['service_id'])
         if request.form.get('deadline'):
             task.deadline = datetime.strptime(request.form['deadline'], '%Y-%m-%d')
-        
         db.session.add(task)
         db.session.commit()
-        
-        flash('Задача успешно создана', 'success')
+        log_audit('task', task.id, 'INSERT', new_data={'title': task.title})
+        flash('Задача создана', 'success')
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Ошибка при создании задачи: {e}")
-        flash(f'Ошибка при создании задачи: {str(e)}', 'danger')
-    
-    return redirect(url_for('admin_tasks'))
-
-@app.route('/admin/tasks/<int:task_id>/update', methods=['POST'])
-@admin_required
-def update_task(task_id):
-    task = Task.query.get_or_404(task_id)
-    
-    try:
-        task.address = request.form['address']
-        task.work_type = request.form['work_type']
-        task.description = request.form['description']
-        task.priority = request.form['priority']
-        
-        if request.form.get('assigned_to'):
-            task.assigned_to = int(request.form['assigned_to'])
-            task.status = 'assigned'
-        else:
-            task.assigned_to = None
-        
-        if request.form.get('deadline'):
-            task.deadline = datetime.strptime(request.form['deadline'], '%Y-%m-%d')
-        else:
-            task.deadline = None
-        
-        db.session.commit()
-        flash('Задача успешно обновлена', 'success')
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Ошибка при обновлении задачи: {e}")
-        flash(f'Ошибка при обновлении задачи: {str(e)}', 'danger')
-    
-    return redirect(url_for('admin_tasks'))
-
-@app.route('/admin/tasks/<int:task_id>/delete', methods=['POST'])
-@admin_required
-def delete_task(task_id):
-    task = Task.query.get_or_404(task_id)
-    
-    try:
-        # Удаляем связанные записи времени
-        TimeEntry.query.filter_by(task_id=task_id).delete()
-        
-        db.session.delete(task)
-        db.session.commit()
-        flash('Задача успешно удалена', 'success')
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Ошибка при удалении задачи: {e}")
-        flash(f'Ошибка при удалении задачи: {str(e)}', 'danger')
-    
-    return redirect(url_for('admin_tasks'))
-
-@app.route('/admin/tasks/<int:task_id>/change_status', methods=['POST'])
-@admin_required
-def change_task_status(task_id):
-    task = Task.query.get_or_404(task_id)
-    new_status = request.form['status']
-    
-    try:
-        task.status = new_status
-        
-        if new_status == 'completed':
-            task.completed_at = datetime.utcnow()
-        
-        db.session.commit()
-        flash('Статус задачи обновлен', 'success')
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Ошибка при изменении статуса задачи: {e}")
         flash(f'Ошибка: {str(e)}', 'danger')
-    
-    return redirect(url_for('admin_tasks'))
+    return redirect(url_for('operator_tasks'))
 
-# Управление работниками (администратор)
-@app.route('/admin/workers')
-@admin_required
-def admin_workers():
+@app.route('/operator/tasks/<int:task_id>/assign', methods=['POST'])
+@operator_required
+def assign_task(task_id):
+    task = Task.query.get_or_404(task_id)
+    worker_id = request.form.get('worker_id')
+    if not worker_id:
+        flash('Выберите работника', 'danger')
+        return redirect(url_for('operator_tasks'))
     try:
-        workers = Worker.query.order_by(Worker.created_at.desc()).all()
-        return render_template('admin_workers.html', workers=workers)
-    except Exception as e:
-        logger.error(f"Ошибка в admin_workers: {e}")
-        flash('Ошибка при загрузке данных работников', 'danger')
-        return render_template('admin_workers.html', workers=[])
-
-@app.route('/admin/workers/create', methods=['POST'])
-@admin_required
-def create_worker():
-    try:
-        username = request.form['username']
-        
-        if Worker.query.filter_by(username=username).first():
-            flash('Пользователь с таким именем уже существует', 'danger')
-            return redirect(url_for('admin_workers'))
-        
-        worker = Worker(
-            username=username,
-            full_name=request.form['full_name'],
-            position=request.form['position'],
-            department=request.form['department'],
-            phone=request.form.get('phone', ''),
-            email=request.form.get('email', ''),
-            is_admin=request.form.get('is_admin') == 'on'
-        )
-        
-        worker.set_password(request.form['password'])
-        
-        db.session.add(worker)
+        task.assigned_to = int(worker_id)
+        task.status = 'assigned'
         db.session.commit()
-        
-        flash('Работник успешно добавлен', 'success')
+        log_audit('task', task.id, 'UPDATE', new_data={'assigned_to': worker_id, 'status': 'assigned'})
+        flash('Задача назначена', 'success')
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Ошибка при добавлении работника: {e}")
-        flash(f'Ошибка при добавлении работника: {str(e)}', 'danger')
-    
-    return redirect(url_for('admin_workers'))
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('operator_tasks'))
 
-@app.route('/admin/workers/<int:worker_id>/update', methods=['POST'])
-@admin_required
-def update_worker(worker_id):
-    worker = Worker.query.get_or_404(worker_id)
-    
+@app.route('/operator/tasks/<int:task_id>/reject', methods=['POST'])
+@operator_required
+def reject_task(task_id):
+    task = Task.query.get_or_404(task_id)
     try:
-        worker.full_name = request.form['full_name']
-        worker.position = request.form['position']
-        worker.department = request.form['department']
-        worker.phone = request.form.get('phone', '')
-        worker.email = request.form.get('email', '')
-        worker.is_active = request.form.get('is_active') == 'on'
-        worker.is_admin = request.form.get('is_admin') == 'on'
-        
-        if request.form.get('password'):
-            worker.set_password(request.form['password'])
-        
+        task.status = 'rejected'
         db.session.commit()
-        flash('Данные работника обновлены', 'success')
+        log_audit('task', task.id, 'UPDATE', new_data={'status': 'rejected'})
+        flash('Задача отклонена', 'success')
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Ошибка при обновлении работника: {e}")
-        flash(f'Ошибка при обновлении данных: {str(e)}', 'danger')
-    
-    return redirect(url_for('admin_workers'))
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('operator_tasks'))
 
 # Панель работника
 @app.route('/worker')
-@login_required
+@worker_required
 def worker_dashboard():
     worker_id = session['user_id']
-    
-    try:
-        active_tasks = Task.query.filter_by(
-            assigned_to=worker_id,
-            status='assigned'
-        ).order_by(Task.deadline.asc()).all()
-        
-        in_progress_tasks = Task.query.filter_by(
-            assigned_to=worker_id,
-            status='in_progress'
-        ).order_by(Task.deadline.asc()).all()
-        
-        completed_tasks = Task.query.filter_by(
-            assigned_to=worker_id,
-            status='completed'
-        ).order_by(Task.completed_at.desc()).limit(10).all()
-        
-        today = datetime.utcnow().date()
-        week_start = today - timedelta(days=today.weekday())
-        
-        today_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
-            TimeEntry.worker_id == worker_id,
-            db.func.date(TimeEntry.start_time) == today
-        ).scalar() or 0
-        
-        week_time = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
-            TimeEntry.worker_id == worker_id,
-            db.func.date(TimeEntry.start_time) >= week_start
-        ).scalar() or 0
-        
-        return render_template('worker_dashboard.html',
-                             active_tasks=active_tasks,
-                             in_progress_tasks=in_progress_tasks,
-                             completed_tasks=completed_tasks,
-                             today_time=today_time,
-                             week_time=week_time)
-    except Exception as e:
-        logger.error(f"Ошибка в worker_dashboard: {e}")
-        flash('Ошибка при загрузке данных', 'danger')
-        return render_template('worker_dashboard.html',
-                             active_tasks=[],
-                             in_progress_tasks=[],
-                             completed_tasks=[],
-                             today_time=0,
-                             week_time=0)
-
-@app.route('/worker/tasks/<int:task_id>')
-@login_required
-def task_details(task_id):
-    try:
-        task = Task.query.get_or_404(task_id)
-        worker_id = session['user_id']
-        
-        if task.assigned_to != worker_id and not session.get('is_admin'):
-            abort(403)
-        
-        time_entries = TimeEntry.query.filter_by(
-            task_id=task_id,
-            worker_id=worker_id
-        ).order_by(TimeEntry.start_time.desc()).all()
-        
-        return render_template('task_details.html', 
-                             task=task, 
-                             time_entries=time_entries)
-    except Exception as e:
-        logger.error(f"Ошибка в task_details: {e}")
-        flash('Ошибка при загрузке деталей задачи', 'danger')
-        return redirect(url_for('worker_dashboard'))
+    assigned_tasks = Task.query.filter_by(assigned_to=worker_id, status='assigned').all()
+    in_progress_tasks = Task.query.filter_by(assigned_to=worker_id, status='in_progress').all()
+    completed_tasks = Task.query.filter_by(assigned_to=worker_id, status='completed').order_by(Task.completed_at.desc()).limit(10).all()
+    return render_template('worker/dashboard.html',
+                           assigned_tasks=assigned_tasks,
+                           in_progress_tasks=in_progress_tasks,
+                           completed_tasks=completed_tasks)
 
 @app.route('/worker/tasks/<int:task_id>/accept', methods=['POST'])
-@login_required
-def accept_task(task_id):
+@worker_required
+def worker_accept_task(task_id):
     task = Task.query.get_or_404(task_id)
-    
-    if task.status != 'assigned' or task.assigned_to != session['user_id']:
+    if task.assigned_to != session['user_id'] or task.status != 'assigned':
         flash('Невозможно принять эту задачу', 'danger')
         return redirect(url_for('worker_dashboard'))
-    
     try:
         task.status = 'in_progress'
         db.session.commit()
+        log_audit('task', task.id, 'UPDATE', new_data={'status': 'in_progress'})
         flash('Задача принята в работу', 'success')
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Ошибка при принятии задачи: {e}")
         flash(f'Ошибка: {str(e)}', 'danger')
-    
+    return redirect(url_for('worker_dashboard'))
+
+@app.route('/worker/tasks/<int:task_id>/reject', methods=['POST'])
+@worker_required
+def worker_reject_task(task_id):
+    task = Task.query.get_or_404(task_id)
+    if task.assigned_to != session['user_id'] or task.status != 'assigned':
+        flash('Невозможно отклонить эту задачу', 'danger')
+        return redirect(url_for('worker_dashboard'))
+    try:
+        task.status = 'rejected'
+        task.assigned_to = None
+        db.session.commit()
+        log_audit('task', task.id, 'UPDATE', new_data={'status': 'rejected', 'assigned_to': None})
+        flash('Задача отклонена', 'success')
+    except Exception as e:
+        db.session.rollback()
+        flash(f'Ошибка: {str(e)}', 'danger')
     return redirect(url_for('worker_dashboard'))
 
 @app.route('/worker/tasks/<int:task_id>/complete', methods=['POST'])
-@login_required
-def complete_task(task_id):
+@worker_required
+def worker_complete_task(task_id):
     task = Task.query.get_or_404(task_id)
-    
     if task.assigned_to != session['user_id'] or task.status != 'in_progress':
         flash('Невозможно завершить эту задачу', 'danger')
         return redirect(url_for('worker_dashboard'))
-    
     try:
         task.status = 'completed'
         task.completed_at = datetime.utcnow()
-        
-        active_time_entry = TimeEntry.query.filter_by(
-            task_id=task_id,
-            worker_id=session['user_id'],
-            end_time=None
-        ).first()
-        
-        if active_time_entry:
-            active_time_entry.end_time = datetime.utcnow()
-            hours = (active_time_entry.end_time - active_time_entry.start_time).total_seconds() / 3600
-            active_time_entry.hours_spent = round(hours, 2)
-        
         db.session.commit()
-        flash('Задача отмечена как выполненная', 'success')
+        log_audit('task', task.id, 'UPDATE', new_data={'status': 'completed'})
+        flash('Задача завершена', 'success')
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Ошибка при завершении задачи: {e}")
         flash(f'Ошибка: {str(e)}', 'danger')
-    
     return redirect(url_for('worker_dashboard'))
 
-@app.route('/worker/tasks/<int:task_id>/time/start', methods=['POST'])
-@login_required
-def start_time_tracking(task_id):
+# Панель клиента
+@app.route('/client')
+@client_required
+def client_dashboard():
+    client_id = session['user_id']
+    services = User.query.get(client_id).services
+    tasks = Task.query.filter_by(client_id=client_id).order_by(Task.created_at.desc()).all()
+    return render_template('client/dashboard.html', services=services, tasks=tasks)
+
+@app.route('/client/tasks/create', methods=['POST'])
+@client_required
+def client_create_task():
     try:
-        task = Task.query.get_or_404(task_id)
-        
-        if task.assigned_to != session['user_id'] or task.status != 'in_progress':
-            return jsonify({'success': False, 'message': 'Невозможно начать отсчет времени для этой задачи'})
-        
-        active_entry = TimeEntry.query.filter_by(
-            worker_id=session['user_id'],
-            end_time=None
-        ).first()
-        
-        if active_entry:
-            return jsonify({'success': False, 'message': 'Завершите текущую запись времени перед началом новой'})
-        
-        time_entry = TimeEntry(
-            task_id=task_id,
-            worker_id=session['user_id'],
-            start_time=datetime.utcnow(),
-            description=request.form.get('description', '')
+        task = Task(
+            title=request.form['title'],
+            description=request.form['description'],
+            status='new',
+            created_by_id=session['user_id'],
+            client_id=session['user_id'],
+            service_id=int(request.form['service_id']) if request.form.get('service_id') else None
         )
-        
-        db.session.add(time_entry)
+        db.session.add(task)
         db.session.commit()
-        
-        return jsonify({'success': True, 'time_entry_id': time_entry.id})
+        log_audit('task', task.id, 'INSERT', new_data={'title': task.title, 'client_id': session['user_id']})
+        flash('Заявка создана', 'success')
     except Exception as e:
         db.session.rollback()
-        logger.error(f"Ошибка при старте отсчета времени: {e}")
-        return jsonify({'success': False, 'message': str(e)})
+        flash(f'Ошибка: {str(e)}', 'danger')
+    return redirect(url_for('client_dashboard'))
 
-@app.route('/worker/tasks/time/<int:time_entry_id>/stop', methods=['POST'])
+# API для получения статуса заявки (для клиента)
+@app.route('/api/task/<int:task_id>/status')
 @login_required
-def stop_time_tracking(time_entry_id):
-    try:
-        time_entry = TimeEntry.query.get_or_404(time_entry_id)
-        
-        if time_entry.worker_id != session['user_id']:
-            return jsonify({'success': False, 'message': 'Доступ запрещен'})
-        
-        time_entry.end_time = datetime.utcnow()
-        hours = (time_entry.end_time - time_entry.start_time).total_seconds() / 3600
-        time_entry.hours_spent = round(hours, 2)
-        
-        db.session.commit()
-        
-        return jsonify({
-            'success': True, 
-            'hours_spent': time_entry.hours_spent,
-            'total_hours': get_total_task_hours(time_entry.task_id)
-        })
-    except Exception as e:
-        db.session.rollback()
-        logger.error(f"Ошибка при остановке отсчета времени: {e}")
-        return jsonify({'success': False, 'message': str(e)})
+def task_status(task_id):
+    task = Task.query.get_or_404(task_id)
+    if task.client_id != session['user_id'] and session.get('role') not in ['admin', 'operator']:
+        abort(403)
+    return jsonify({'status': task.status, 'updated_at': task.updated_at if hasattr(task, 'updated_at') else None})
 
-def get_total_task_hours(task_id):
-    try:
-        total = db.session.query(db.func.sum(TimeEntry.hours_spent)).filter_by(
-            task_id=task_id
-        ).scalar()
-        return round(total or 0, 2)
-    except Exception as e:
-        logger.error(f"Ошибка при подсчете часов: {e}")
-        return 0
-
-# API для получения статистики
-@app.route('/api/stats')
-@login_required
-def get_stats():
-    worker_id = session['user_id']
-    
-    try:
-        if session.get('is_admin'):
-            stats = {
-                'total_tasks': Task.query.count(),
-                'completed_tasks': Task.query.filter_by(status='completed').count(),
-                'active_workers': Worker.query.filter_by(is_active=True).count()
-            }
-        else:
-            today = datetime.utcnow().date()
-            
-            stats = {
-                'assigned_tasks': Task.query.filter_by(assigned_to=worker_id, status='assigned').count(),
-                'in_progress_tasks': Task.query.filter_by(assigned_to=worker_id, status='in_progress').count(),
-                'today_hours': db.session.query(db.func.sum(TimeEntry.hours_spent)).filter(
-                    TimeEntry.worker_id == worker_id,
-                    db.func.date(TimeEntry.start_time) == today
-                ).scalar() or 0
-            }
-        
-        return jsonify(stats)
-    except Exception as e:
-        logger.error(f"Ошибка в get_stats: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# Health check endpoint для Render.com
-@app.route('/health')
-def health():
-    try:
-        # Проверяем подключение к базе данных
-        db.session.execute('SELECT 1')
-        return jsonify({'status': 'healthy', 'database': 'connected'})
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        return jsonify({'status': 'unhealthy', 'database': 'disconnected', 'error': str(e)}), 500
-
-# Обработчик ошибок
+# Обработчики ошибок
 @app.errorhandler(404)
 def not_found_error(error):
     return render_template('error.html', error='Страница не найдена'), 404
@@ -733,30 +612,9 @@ def internal_error(error):
 def forbidden_error(error):
     return render_template('error.html', error='Доступ запрещен'), 403
 
-# Добавляем контекстный процессор для шаблонов
 @app.context_processor
 def inject_now():
     return {'now': datetime.utcnow()}
-
-# Создаем файл error.html если его нет
-if not os.path.exists('templates/error.html'):
-    error_html = '''
-    {% extends "layout.html" %}
-    {% block title %}Ошибка{% endblock %}
-    {% block content %}
-    <div class="container mt-5">
-        <div class="row justify-content-center">
-            <div class="col-md-6 text-center">
-                <h1 class="display-1 text-danger">Ошибка</h1>
-                <h3 class="mt-4">{{ error }}</h3>
-                <a href="{{ url_for('index') }}" class="btn btn-primary mt-4">Вернуться на главную</a>
-            </div>
-        </div>
-    </div>
-    {% endblock %}
-    '''
-    with open('templates/error.html', 'w', encoding='utf-8') as f:
-        f.write(error_html)
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
