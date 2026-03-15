@@ -12,7 +12,7 @@
     <nav class="navbar navbar-expand-lg navbar-dark bg-primary">
         <div class="container">
             <a class="navbar-brand" href="{{ url_for('index') }}">
-                <i class="bi bi-clipboard-check"></i> Отчетность предприятия связи
+                <i class="bi bi-clipboard-check"></i> Телеком-Сервис
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -22,30 +22,39 @@
                     {% if session.user_id %}
                         <li class="nav-item">
                             <span class="nav-link">
-                                <i class="bi bi-person-circle"></i> {{ session.full_name }}
+                                <i class="bi bi-person-circle"></i> {{ session.full_name }} ({{ session.role }})
                             </span>
                         </li>
-                        {% if session.is_admin %}
+                        {% if session.role == 'admin' %}
                             <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('admin_dashboard') }}">
-                                    <i class="bi bi-speedometer2"></i> Панель
-                                </a>
+                                <a class="nav-link" href="{{ url_for('admin_dashboard') }}">Панель</a>
                             </li>
                             <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('admin_tasks') }}">
-                                    <i class="bi bi-list-task"></i> Задачи
-                                </a>
+                                <a class="nav-link" href="{{ url_for('admin_users') }}">Пользователи</a>
                             </li>
                             <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('admin_workers') }}">
-                                    <i class="bi bi-people"></i> Работники
-                                </a>
+                                <a class="nav-link" href="{{ url_for('admin_services') }}">Услуги</a>
                             </li>
-                        {% else %}
                             <li class="nav-item">
-                                <a class="nav-link" href="{{ url_for('worker_dashboard') }}">
-                                    <i class="bi bi-house-door"></i> Мои задачи
-                                </a>
+                                <a class="nav-link" href="{{ url_for('admin_audit') }}">Аудит</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('admin_db') }}">БД</a>
+                            </li>
+                        {% elif session.role == 'operator' %}
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('operator_dashboard') }}">Панель</a>
+                            </li>
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('operator_tasks') }}">Задачи</a>
+                            </li>
+                        {% elif session.role == 'worker' %}
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('worker_dashboard') }}">Мои задачи</a>
+                            </li>
+                        {% elif session.role == 'client' %}
+                            <li class="nav-item">
+                                <a class="nav-link" href="{{ url_for('client_dashboard') }}">Личный кабинет</a>
                             </li>
                         {% endif %}
                         <li class="nav-item">
