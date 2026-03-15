@@ -1,0 +1,55 @@
+{% extends "layout.html" %}
+{% block title %}Добро пожаловать{% endblock %}
+{% block content %}
+<div class="row align-items-center">
+    <div class="col-md-6">
+        <h1 class="display-4">Телеком-Сервис</h1>
+        <p class="lead">Современная система управления заявками и услугами для предприятий связи.</p>
+        <hr class="my-4">
+        <p>Мы обеспечиваем прозрачность и эффективность работы вашего бизнеса.</p>
+        <a class="btn btn-primary btn-lg" href="{{ url_for('login') }}" role="button">Войти в систему</a>
+    </div>
+    <div class="col-md-6">
+        <img src="https://via.placeholder.com/500x300?text=Telecom+Service" class="img-fluid rounded" alt="Презентация">
+    </div>
+</div>
+
+<div class="row mt-5">
+    <div class="col-md-4">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-person-badge display-1 text-primary"></i>
+                <h5 class="card-title">Для администраторов</h5>
+                <p class="card-text">Полный контроль над пользователями, услугами и заявками. Журналы аудита и бэкапы.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-headset display-1 text-primary"></i>
+                <h5 class="card-title">Для операторов</h5>
+                <p class="card-text">Создание и назначение заявок работникам, обработка обращений клиентов.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-tools display-1 text-primary"></i>
+                <h5 class="card-title">Для работников</h5>
+                <p class="card-text">Приём и выполнение задач, учёт времени, отчётность.</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4 offset-md-4">
+        <div class="card text-center">
+            <div class="card-body">
+                <i class="bi bi-house display-1 text-primary"></i>
+                <h5 class="card-title">Для клиентов</h5>
+                <p class="card-text">Личный кабинет: просмотр услуг, создание заявок, отслеживание статуса.</p>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
