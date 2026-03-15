@@ -1,0 +1,95 @@
+{% extends "layout.html" %}
+{% block title %}Личный кабинет клиента{% endblock %}
+{% block content %}
+<h2>Мои услуги</h2>
+<div class="row">
+    {% for service in services %}
+    <div class="col-md-4 mb-3">
+        <div class="card">
+            <div class="card-body">
+                <h5>{{ service.name }}</h5>
+                <p>{{ service.description }}</p>
+                <p><strong>Цена:</strong> {{ service.price }} руб.</p>
+            </div>
+        </div>
+    </div>
+    {% else %}
+    <p>У вас нет подключенных услуг.</p>
+    {% endfor %}
+</div>
+
+<h2 class="mt-4">Мои заявки</h2>
+<button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#createTaskModal">Создать заявку</button>
+<table class="table">
+    <thead>
+        <tr>
+            <th>№</th>
+            <th>Название</th>
+            <th>Статус</th>
+            <th>Дата создания</th>
+            <th>Статус</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for task in tasks %}
+        <tr>
+            <td>{{ task.id }}</td>
+            <td>{{ task.title }}</td>
+            <td>
+                <span class="badge bg-{% if task.status == 'completed' %}success{% elif task.status == 'rejected' %}danger{% else %}warning{% endif %}">
+                    {{ task.status }}
+                </span>
+            </td>
+            <td>{{ task.created_at.strftime('%d.%m.%Y') }}</td>
+            <td><a href="#" onclick="fetchStatus({{ task.id }})">Обновить</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- Модальное окно создания заявки -->
+<div class="modal fade" id="createTaskModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('client_create_task') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="modal-header">
+                    <h5>Новая заявка</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label>Название</label>
+                        <input type="text" name="title" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label>Описание</label>
+                        <textarea name="description" class="form-control" rows="3" required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label>Услуга (если применимо)</label>
+                        <select name="service_id" class="form-select">
+                            <option value="">-- Не выбрано --</option>
+                            {% for service in services %}
+                            <option value="{{ service.id }}">{{ service.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Отправить</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+async function fetchStatus(taskId) {
+    let response = await fetch('/api/task/' + taskId + '/status');
+    let data = await response.json();
+    alert('Статус: ' + data.status);
+}
+</script>
+{% endblock %}
