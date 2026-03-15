@@ -1,0 +1,18 @@
+{% extends "layout.html" %}
+{% block title %}Таблицы БД{% endblock %}
+{% block content %}
+<h2>Таблицы базы данных</h2>
+<div class="row">
+    {% for table, count in tables.items() %}
+    <div class="col-md-4 mb-3">
+        <div class="card">
+            <div class="card-body">
+                <h5>{{ table }}</h5>
+                <p>Записей: {{ count }}</p>
+                <a href="{{ url_for('view_table', table_name=table) }}" class="btn btn-sm btn-primary">Просмотр</a>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}
