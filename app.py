@@ -1,14 +1,16 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, g, abort, send_file
+import os
+import logging
+import json
+import shutil
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify, abort, send_file
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import HTTPException
 from functools import wraps
-import os
-from datetime import datetime, timedelta
-import logging
-import json
-import shutil
-from pathlib import Path
+from flask_wtf.csrf import CSRFProtect
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -20,8 +22,7 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///app.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(hours=2)
 
-# Для CSRF защиты (используем Flask-WTF)
-from flask_wtf.csrf import CSRFProtect
+# CSRF защита
 csrf = CSRFProtect(app)
 
 from database import db, User, Service, Task, TimeEntry, AuditLog, LoginAttempt, init_db
@@ -113,7 +114,7 @@ def check_password_change():
                 flash('Необходимо сменить пароль', 'warning')
                 return redirect(url_for('change_password'))
 
-# Маршрут смены пароля (при первом входе или добровольно)
+# Маршрут смены пароля
 @app.route('/change-password', methods=['GET', 'POST'])
 @login_required
 def change_password():
@@ -150,7 +151,7 @@ def index():
             return redirect(url_for('worker_dashboard'))
         elif user.role == 'client':
             return redirect(url_for('client_dashboard'))
-    return render_template('index.html')  # презентационная страница
+    return render_template('index.html')
 
 # Аутентификация
 @app.route('/login', methods=['GET', 'POST'])
@@ -194,7 +195,6 @@ def admin_dashboard():
     recent_audit = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(10).all()
     return render_template('admin/dashboard.html', stats=stats, recent_audit=recent_audit)
 
-# Управление пользователями (админ)
 @app.route('/admin/users')
 @admin_required
 def admin_users():
@@ -211,8 +211,8 @@ def create_user():
             role=request.form['role'],
             email=request.form.get('email'),
             phone=request.form.get('phone'),
-            position=request.form.get('position'),
-            department=request.form.get('department'),
+            position=request.form.get('position') if request.form['role'] in ['operator', 'worker'] else None,
+            department=request.form.get('department') if request.form['role'] in ['operator', 'worker'] else None,
             contract_number=request.form.get('contract_number') if request.form['role'] == 'client' else None,
             is_active=True,
             password_change_required=True
@@ -241,8 +241,12 @@ def update_user(user_id):
         user.is_active = 'is_active' in request.form
         if request.form['role'] == 'client':
             user.contract_number = request.form.get('contract_number')
+            user.position = None
+            user.department = None
         else:
             user.contract_number = None
+            user.position = request.form.get('position')
+            user.department = request.form.get('department')
         if request.form.get('password'):
             user.set_password(request.form['password'])
             user.password_change_required = True
@@ -275,7 +279,6 @@ def delete_user(user_id):
         flash(f'Ошибка: {str(e)}', 'danger')
     return redirect(url_for('admin_users'))
 
-# Управление услугами (админ/оператор)
 @app.route('/admin/services')
 @admin_required
 def admin_services():
@@ -318,7 +321,6 @@ def update_service(service_id):
         flash(f'Ошибка: {str(e)}', 'danger')
     return redirect(url_for('admin_services'))
 
-# Журналы аудита и попыток входа
 @app.route('/admin/audit')
 @admin_required
 def admin_audit():
@@ -375,7 +377,6 @@ def restore_backup(filename):
         flash(f'Ошибка восстановления: {str(e)}', 'danger')
     return redirect(url_for('admin_db'))
 
-# Просмотр всех таблиц (админ)
 @app.route('/admin/tables')
 @admin_required
 def admin_tables():
@@ -416,7 +417,7 @@ def operator_dashboard():
     completed_tasks = Task.query.filter_by(status='completed').count()
     workers = User.query.filter_by(role='worker', is_active=True).all()
     recent_tasks = Task.query.order_by(Task.created_at.desc()).limit(10).all()
-    return render_template('operator/dashboard.html', 
+    return render_template('operator/dashboard.html',
                            new_tasks=new_tasks,
                            assigned_tasks=assigned_tasks,
                            completed_tasks=completed_tasks,
@@ -506,6 +507,15 @@ def worker_dashboard():
                            in_progress_tasks=in_progress_tasks,
                            completed_tasks=completed_tasks)
 
+@app.route('/worker/tasks/<int:task_id>')
+@worker_required
+def worker_task_details(task_id):
+    task = Task.query.get_or_404(task_id)
+    if task.assigned_to != session['user_id']:
+        abort(403)
+    time_entries = TimeEntry.query.filter_by(task_id=task_id, worker_id=session['user_id']).order_by(TimeEntry.start_time.desc()).all()
+    return render_template('worker/task_details.html', task=task, time_entries=time_entries)
+
 @app.route('/worker/tasks/<int:task_id>/accept', methods=['POST'])
 @worker_required
 def worker_accept_task(task_id):
@@ -559,6 +569,46 @@ def worker_complete_task(task_id):
         flash(f'Ошибка: {str(e)}', 'danger')
     return redirect(url_for('worker_dashboard'))
 
+@app.route('/worker/tasks/<int:task_id>/time/start', methods=['POST'])
+@worker_required
+def start_time_tracking(task_id):
+    task = Task.query.get_or_404(task_id)
+    if task.assigned_to != session['user_id'] or task.status != 'in_progress':
+        return jsonify({'success': False, 'message': 'Невозможно начать отсчёт времени'})
+    # Проверяем, нет ли уже активной записи
+    active = TimeEntry.query.filter_by(worker_id=session['user_id'], end_time=None).first()
+    if active:
+        return jsonify({'success': False, 'message': 'Сначала завершите текущую запись'})
+    try:
+        entry = TimeEntry(
+            task_id=task_id,
+            worker_id=session['user_id'],
+            start_time=datetime.utcnow(),
+            description=request.form.get('description', '')
+        )
+        db.session.add(entry)
+        db.session.commit()
+        return jsonify({'success': True, 'time_entry_id': entry.id})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)})
+
+@app.route('/worker/tasks/time/<int:time_entry_id>/stop', methods=['POST'])
+@worker_required
+def stop_time_tracking(time_entry_id):
+    entry = TimeEntry.query.get_or_404(time_entry_id)
+    if entry.worker_id != session['user_id']:
+        return jsonify({'success': False, 'message': 'Доступ запрещён'})
+    try:
+        entry.end_time = datetime.utcnow()
+        hours = (entry.end_time - entry.start_time).total_seconds() / 3600
+        entry.hours_spent = round(hours, 2)
+        db.session.commit()
+        return jsonify({'success': True, 'hours_spent': entry.hours_spent})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': str(e)})
+
 # Панель клиента
 @app.route('/client')
 @client_required
@@ -589,14 +639,14 @@ def client_create_task():
         flash(f'Ошибка: {str(e)}', 'danger')
     return redirect(url_for('client_dashboard'))
 
-# API для получения статуса заявки (для клиента)
+# API для статуса задачи (клиент)
 @app.route('/api/task/<int:task_id>/status')
 @login_required
 def task_status(task_id):
     task = Task.query.get_or_404(task_id)
     if task.client_id != session['user_id'] and session.get('role') not in ['admin', 'operator']:
         abort(403)
-    return jsonify({'status': task.status, 'updated_at': task.updated_at if hasattr(task, 'updated_at') else None})
+    return jsonify({'status': task.status, 'created_at': task.created_at, 'completed_at': task.completed_at})
 
 # Обработчики ошибок
 @app.errorhandler(404)
