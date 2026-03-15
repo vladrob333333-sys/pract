@@ -1,0 +1,113 @@
+{% extends "layout.html" %}
+{% block title %}Задача #{{ task.id }}{% endblock %}
+{% block content %}
+<div class="row">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h4>Задача #{{ task.id }}: {{ task.title }}</h4>
+            </div>
+            <div class="card-body">
+                <p><strong>Описание:</strong> {{ task.description }}</p>
+                <p><strong>Адрес:</strong> {{ task.address }}</p>
+                <p><strong>Вид работ:</strong> {{ task.work_type }}</p>
+                <p><strong>Приоритет:</strong> {{ task.priority }}</p>
+                <p><strong>Статус:</strong> {{ task.status }}</p>
+                <p><strong>Срок:</strong> {{ task.deadline.strftime('%d.%m.%Y') if task.deadline else 'Не указан' }}</p>
+                
+                {% if task.status == 'in_progress' %}
+                <hr>
+                <h5>Учёт времени</h5>
+                <div id="timeTracking">
+                    {% set active = namespace(entry=None) %}
+                    {% for entry in time_entries if not entry.end_time %}
+                        {% set active.entry = entry %}
+                    {% endfor %}
+                    {% if not active.entry %}
+                    <button id="startBtn" class="btn btn-success" onclick="startTime()">Начать работу</button>
+                    <div class="mt-2">
+                        <label>Описание работы</label>
+                        <textarea id="workDesc" class="form-control"></textarea>
+                    </div>
+                    {% else %}
+                    <p>В работе с {{ active.entry.start_time.strftime('%H:%M:%S') }}</p>
+                    <button id="stopBtn" class="btn btn-danger" onclick="stopTime({{ active.entry.id }})">Завершить работу</button>
+                    <h4 id="timerDisplay">00:00:00</h4>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">Учёт времени</div>
+            <div class="card-body">
+                {% if time_entries %}
+                <ul class="list-group">
+                    {% for entry in time_entries %}
+                    <li class="list-group-item">
+                        {{ entry.start_time.strftime('%d.%m.%Y %H:%M') }} - 
+                        {% if entry.end_time %}{{ entry.end_time.strftime('%H:%M') }} ({{ entry.hours_spent }} ч){% else %}...{% endif %}
+                        <br><small>{{ entry.description }}</small>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p>Нет записей</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+let timerInterval;
+let startTime = null;
+{% if active.entry %}
+    startTime = new Date('{{ active.entry.start_time.isoformat() }}');
+    timerInterval = setInterval(updateTimer, 1000);
+{% endif %}
+
+function updateTimer() {
+    if (!startTime) return;
+    let now = new Date();
+    let diff = now - startTime;
+    let hours = Math.floor(diff / 3600000);
+    let minutes = Math.floor((diff % 3600000) / 60000);
+    let seconds = Math.floor((diff % 60000) / 1000);
+    document.getElementById('timerDisplay').innerText = 
+        `${hours.toString().padStart(2,'0')}:${minutes.toString().padStart(2,'0')}:${seconds.toString().padStart(2,'0')}`;
+}
+
+async function startTime() {
+    let desc = document.getElementById('workDesc').value;
+    let response = await fetch('/worker/tasks/{{ task.id }}/time/start', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-CSRFToken': '{{ csrf_token() }}'
+        },
+        body: new URLSearchParams({ description: desc })
+    });
+    let data = await response.json();
+    if (data.success) {
+        location.reload();
+    } else {
+        alert(data.message);
+    }
+}
+
+async function stopTime(entryId) {
+    let response = await fetch('/worker/tasks/time/' + entryId + '/stop', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': '{{ csrf_token() }}' }
+    });
+    let data = await response.json();
+    if (data.success) {
+        location.reload();
+    } else {
+        alert(data.message);
+    }
+}
+</script>
+{% endblock %}
