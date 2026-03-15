@@ -19,21 +19,20 @@ class User(db.Model):
     password_hash = db.Column(db.String(200), nullable=False)
     full_name = db.Column(db.String(100), nullable=False)
     role = db.Column(db.String(20), nullable=False, default='client')  # admin, operator, worker, client
-    # Общие поля
     phone = db.Column(db.String(20))
     email = db.Column(db.String(120))
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    password_change_required = db.Column(db.Boolean, default=False)  # для первого входа админа
+    password_change_required = db.Column(db.Boolean, default=False)
     
     # Поля для клиента
-    contract_number = db.Column(db.String(50), unique=True)  # номер договора
+    contract_number = db.Column(db.String(50), unique=True)
     services = db.relationship('Service', secondary=client_service, lazy='subquery',
                                backref=db.backref('clients', lazy=True))
     
     # Поля для работника/оператора
-    position = db.Column(db.String(100))   # должность (для работников и операторов)
-    department = db.Column(db.String(100)) # отдел
+    position = db.Column(db.String(100))
+    department = db.Column(db.String(100))
     
     # Связи
     created_tasks = db.relationship('Task', foreign_keys='Task.created_by_id', backref='creator', lazy=True)
@@ -58,28 +57,23 @@ class Task(db.Model):
     __tablename__ = 'task'
     id = db.Column(db.Integer, primary_key=True)
     
-    # Основные поля
-    title = db.Column(db.String(200))  # краткое название
+    title = db.Column(db.String(200))
     description = db.Column(db.Text, nullable=False)
     status = db.Column(db.String(20), default='new')  # new, assigned, in_progress, completed, rejected, cancelled
     priority = db.Column(db.String(20), default='normal')
     
-    # Связи
-    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # кто создал (оператор или клиент)
-    assigned_to = db.Column(db.Integer, db.ForeignKey('user.id'))  # работник, которому назначено
-    client_id = db.Column(db.Integer, db.ForeignKey('user.id'))    # клиент, если заявка от клиента
-    service_id = db.Column(db.Integer, db.ForeignKey('service.id')) # услуга, к которой относится заявка (если применимо)
+    created_by_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    assigned_to = db.Column(db.Integer, db.ForeignKey('user.id'))
+    client_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    service_id = db.Column(db.Integer, db.ForeignKey('service.id'))
     
-    # Детали для выездных задач
-    address = db.Column(db.String(200))   # адрес выполнения (если требуется)
-    work_type = db.Column(db.String(100)) # вид работ (для задач работникам)
+    address = db.Column(db.String(200))
+    work_type = db.Column(db.String(100))
     
-    # Временные метки
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     deadline = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
     
-    # Связи
     time_entries = db.relationship('TimeEntry', backref='task', lazy=True, cascade='all, delete-orphan')
     service = db.relationship('Service')
 
@@ -99,14 +93,14 @@ class AuditLog(db.Model):
     """Журнал аудита изменений в таблицах User и Task"""
     __tablename__ = 'audit_log'
     id = db.Column(db.Integer, primary_key=True)
-    table_name = db.Column(db.String(50), nullable=False)   # 'user', 'task'
-    record_id = db.Column(db.Integer, nullable=False)       # id изменённой записи
-    action = db.Column(db.String(10), nullable=False)       # 'INSERT', 'UPDATE', 'DELETE'
-    old_data = db.Column(db.Text)                           # JSON строка со старыми значениями
-    new_data = db.Column(db.Text)                           # JSON строка с новыми значениями
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))  # кто выполнил действие (может быть NULL для системы)
+    table_name = db.Column(db.String(50), nullable=False)
+    record_id = db.Column(db.Integer, nullable=False)
+    action = db.Column(db.String(10), nullable=False)  # INSERT, UPDATE, DELETE
+    old_data = db.Column(db.Text)  # JSON
+    new_data = db.Column(db.Text)  # JSON
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'))
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    ip_address = db.Column(db.String(45))                   # IPv4 или IPv6
+    ip_address = db.Column(db.String(45))
 
 class LoginAttempt(db.Model):
     """Журнал попыток входа"""
@@ -130,12 +124,11 @@ def init_db():
             email='admin@company.by',
             position='Системный администратор',
             department='ИТ',
-            password_change_required=True  # при первом входе потребуется смена пароля
+            password_change_required=True
         )
         admin.set_password('admin123')
         db.session.add(admin)
         
-        # Создание тестового оператора
         operator = User(
             username='operator',
             full_name='Петров Пётр Петрович',
@@ -147,7 +140,6 @@ def init_db():
         operator.set_password('operator123')
         db.session.add(operator)
         
-        # Создание тестового работника
         worker = User(
             username='ivanov',
             full_name='Иванов Иван Иванович',
@@ -159,7 +151,6 @@ def init_db():
         worker.set_password('worker123')
         db.session.add(worker)
         
-        # Создание тестового клиента
         client = User(
             username='client1',
             full_name='Сидоров Сидор Сидорович',
@@ -171,19 +162,16 @@ def init_db():
         client.set_password('client123')
         db.session.add(client)
         
-        # Создание услуг
         internet = Service(name='Интернет 100 Мбит/с', description='Безлимитный доступ в интернет', price=25.0)
         tv = Service(name='IPTV Базовый', description='50 каналов', price=15.0)
         phone = Service(name='Городской телефон', description='Безлимитный на городские номера', price=10.0)
         db.session.add_all([internet, tv, phone])
         db.session.commit()
         
-        # Подключение услуг клиенту
         client.services.append(internet)
         client.services.append(tv)
         db.session.commit()
         
-        # Создание тестовых задач
         from datetime import datetime, timedelta
         tasks = [
             Task(
