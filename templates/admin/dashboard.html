@@ -1,1 +1,75 @@
+{% extends "layout.html" %}
+{% block title %}Панель администратора{% endblock %}
+{% block content %}
+<h2>Панель администратора</h2>
+<div class="row">
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-primary">
+            <div class="card-body">
+                <h5 class="card-title">Пользователи</h5>
+                <h2 class="display-4">{{ stats.users }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-success">
+            <div class="card-body">
+                <h5 class="card-title">Задачи</h5>
+                <h2 class="display-4">{{ stats.tasks }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-info">
+            <div class="card-body">
+                <h5 class="card-title">Услуги</h5>
+                <h2 class="display-4">{{ stats.services }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3 mb-3">
+        <div class="card text-white bg-warning">
+            <div class="card-body">
+                <h5 class="card-title">Записей аудита</h5>
+                <h2 class="display-4">{{ stats.audit }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
 
+<div class="row">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <h5>Последние записи аудита</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Время</th>
+                            <th>Таблица</th>
+                            <th>ID</th>
+                            <th>Действие</th>
+                            <th>Пользователь</th>
+                            <th>IP</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in recent_audit %}
+                        <tr>
+                            <td>{{ log.timestamp.strftime('%d.%m.%Y %H:%M') }}</td>
+                            <td>{{ log.table_name }}</td>
+                            <td>{{ log.record_id }}</td>
+                            <td>{{ log.action }}</td>
+                            <td>{{ log.user_id }}</td>
+                            <td>{{ log.ip_address }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
