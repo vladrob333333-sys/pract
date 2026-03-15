@@ -1,0 +1,188 @@
+{% extends "layout.html" %}
+{% block title %}Управление пользователями{% endblock %}
+{% block content %}
+<h2>Пользователи</h2>
+<button class="btn btn-primary mb-3" data-bs-toggle="modal" data-bs-target="#createUserModal">Добавить пользователя</button>
+<div class="card">
+    <div class="card-body">
+        <table class="table table-hover">
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Логин</th>
+                    <th>ФИО</th>
+                    <th>Роль</th>
+                    <th>Email</th>
+                    <th>Активен</th>
+                    <th>Действия</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>{{ user.id }}</td>
+                    <td>{{ user.username }}</td>
+                    <td>{{ user.full_name }}</td>
+                    <td>{{ user.role }}</td>
+                    <td>{{ user.email }}</td>
+                    <td>{% if user.is_active %}<span class="badge bg-success">Да</span>{% else %}<span class="badge bg-danger">Нет</span>{% endif %}</td>
+                    <td>
+                        <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#editUserModal{{ user.id }}">Редактировать</button>
+                        {% if user.id != session.user_id %}
+                        <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" style="display:inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Удалить пользователя?')">Удалить</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                <!-- Модальное окно редактирования -->
+                <div class="modal fade" id="editUserModal{{ user.id }}" tabindex="-1">
+                    <div class="modal-dialog">
+                        <div class="modal-content">
+                            <form method="POST" action="{{ url_for('update_user', user_id=user.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <div class="modal-header">
+                                    <h5>Редактирование пользователя</h5>
+                                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                                </div>
+                                <div class="modal-body">
+                                    <div class="mb-3">
+                                        <label>Логин</label>
+                                        <input type="text" class="form-control" value="{{ user.username }}" disabled>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label>ФИО</label>
+                                        <input type="text" name="full_name" class="form-control" value="{{ user.full_name }}" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label>Email</label>
+                                        <input type="email" name="email" class="form-control" value="{{ user.email }}">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label>Телефон</label>
+                                        <input type="text" name="phone" class="form-control" value="{{ user.phone }}">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label>Роль</label>
+                                        <select name="role" class="form-select" required>
+                                            <option value="admin" {% if user.role=='admin' %}selected{% endif %}>Администратор</option>
+                                            <option value="operator" {% if user.role=='operator' %}selected{% endif %}>Оператор</option>
+                                            <option value="worker" {% if user.role=='worker' %}selected{% endif %}>Работник</option>
+                                            <option value="client" {% if user.role=='client' %}selected{% endif %}>Клиент</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3" id="workerFields{{ user.id }}" style="display: {% if user.role in ['operator','worker'] %}block{% else %}none{% endif %};">
+                                        <label>Должность</label>
+                                        <input type="text" name="position" class="form-control" value="{{ user.position }}">
+                                        <label>Отдел</label>
+                                        <input type="text" name="department" class="form-control" value="{{ user.department }}">
+                                    </div>
+                                    <div class="mb-3" id="clientFields{{ user.id }}" style="display: {% if user.role=='client' %}block{% else %}none{% endif %};">
+                                        <label>Номер договора</label>
+                                        <input type="text" name="contract_number" class="form-control" value="{{ user.contract_number }}">
+                                    </div>
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" name="is_active" id="is_active{{ user.id }}" {% if user.is_active %}checked{% endif %}>
+                                            <label class="form-check-label" for="is_active{{ user.id }}">Активен</label>
+                                        </div>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label>Новый пароль (оставьте пустым, чтобы не менять)</label>
+                                        <input type="password" name="password" class="form-control">
+                                    </div>
+                                </div>
+                                <div class="modal-footer">
+                                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                                    <button type="submit" class="btn btn-primary">Сохранить</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                <script>
+                    document.getElementById('editUserModal{{ user.id }}').addEventListener('show.bs.modal', function () {
+                        var roleSelect = this.querySelector('select[name="role"]');
+                        function toggleFields() {
+                            var val = roleSelect.value;
+                            this.querySelector('#workerFields{{ user.id }}').style.display = (val == 'operator' || val == 'worker') ? 'block' : 'none';
+                            this.querySelector('#clientFields{{ user.id }}').style.display = (val == 'client') ? 'block' : 'none';
+                        }
+                        roleSelect.addEventListener('change', toggleFields.bind(this));
+                        toggleFields.call(this);
+                    });
+                </script>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Модальное окно создания пользователя -->
+<div class="modal fade" id="createUserModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <form method="POST" action="{{ url_for('create_user') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div class="modal-header">
+                    <h5>Новый пользователь</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label>Логин*</label>
+                        <input type="text" name="username" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label>Пароль*</label>
+                        <input type="password" name="password" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label>ФИО*</label>
+                        <input type="text" name="full_name" class="form-control" required>
+                    </div>
+                    <div class="mb-3">
+                        <label>Email</label>
+                        <input type="email" name="email" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label>Телефон</label>
+                        <input type="text" name="phone" class="form-control">
+                    </div>
+                    <div class="mb-3">
+                        <label>Роль*</label>
+                        <select name="role" class="form-select" required id="createRoleSelect">
+                            <option value="admin">Администратор</option>
+                            <option value="operator">Оператор</option>
+                            <option value="worker">Работник</option>
+                            <option value="client">Клиент</option>
+                        </select>
+                    </div>
+                    <div class="mb-3" id="createWorkerFields" style="display: none;">
+                        <label>Должность</label>
+                        <input type="text" name="position" class="form-control">
+                        <label>Отдел</label>
+                        <input type="text" name="department" class="form-control">
+                    </div>
+                    <div class="mb-3" id="createClientFields" style="display: none;">
+                        <label>Номер договора</label>
+                        <input type="text" name="contract_number" class="form-control">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Отмена</button>
+                    <button type="submit" class="btn btn-primary">Создать</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+    document.getElementById('createRoleSelect').addEventListener('change', function() {
+        var val = this.value;
+        document.getElementById('createWorkerFields').style.display = (val == 'operator' || val == 'worker') ? 'block' : 'none';
+        document.getElementById('createClientFields').style.display = (val == 'client') ? 'block' : 'none';
+    });
+</script>
+{% endblock %}
